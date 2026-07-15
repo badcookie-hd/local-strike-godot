@@ -12,6 +12,11 @@ var target_position := Vector3.ZERO
 var target_rotation_y := 0.0
 var _body_root: Node3D
 var _weapon: MeshInstance3D
+var _left_leg: MeshInstance3D
+var _right_leg: MeshInstance3D
+var _left_arm: MeshInstance3D
+var _right_arm: MeshInstance3D
+var _walk_phase := 0.0
 
 func configure(id: int, next_team: int) -> void:
 	peer_id = id
@@ -21,13 +26,22 @@ func configure(id: int, next_team: int) -> void:
 func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 1
+	add_to_group("damageable_actor")
 	target_position = global_position
 	_build_collision()
 	_build_visual()
 
 func _physics_process(delta: float) -> void:
+	var previous := global_position
 	global_position = global_position.lerp(target_position, minf(1.0, delta * 14.0))
 	rotation.y = lerp_angle(rotation.y, target_rotation_y, minf(1.0, delta * 16.0))
+	var speed := previous.distance_to(global_position) / maxf(delta, 0.001)
+	_walk_phase += delta * speed * 4.0
+	var swing := sin(_walk_phase) * minf(26.0, speed * 8.0)
+	_left_leg.rotation_degrees.x = swing
+	_right_leg.rotation_degrees.x = -swing
+	_left_arm.rotation_degrees.x = -16.0 - swing * 0.32
+	_right_arm.rotation_degrees.x = -31.0 + swing * 0.2
 
 func apply_snapshot(position: Vector3, yaw: float, next_health: float, next_weapon: String) -> void:
 	target_position = position
@@ -87,10 +101,10 @@ func _build_visual() -> void:
 	var dark := _material(Color("182127"), 0.45, 0.42)
 	_add_box(Vector3(0.58, 0.62, 0.36), Vector3(0, 1.02, 0), uniform)
 	_add_box(Vector3(0.66, 0.3, 0.42), Vector3(0, 1.12, 0), armor)
-	_add_box(Vector3(0.19, 0.76, 0.23), Vector3(-0.18, 0.4, 0), dark)
-	_add_box(Vector3(0.19, 0.76, 0.23), Vector3(0.18, 0.4, 0), dark)
-	_add_box(Vector3(0.18, 0.65, 0.2), Vector3(-0.4, 1.02, -0.04), uniform)
-	_add_box(Vector3(0.18, 0.65, 0.2), Vector3(0.4, 1.02, -0.04), uniform)
+	_left_leg = _add_capsule(0.11, 0.78, Vector3(-0.18, 0.4, 0), dark)
+	_right_leg = _add_capsule(0.11, 0.78, Vector3(0.18, 0.4, 0), dark)
+	_left_arm = _add_capsule(0.095, 0.68, Vector3(-0.4, 1.02, -0.04), uniform)
+	_right_arm = _add_capsule(0.095, 0.68, Vector3(0.4, 1.02, -0.04), uniform)
 	var head := MeshInstance3D.new()
 	var head_mesh := SphereMesh.new()
 	head_mesh.radius = 0.22
@@ -102,6 +116,18 @@ func _build_visual() -> void:
 	head.material_override = _material(Color("a98a72"), 0.75, 0.0)
 	_body_root.add_child(head)
 	_add_box(Vector3(0.42, 0.1, 0.08), Vector3(0, 1.58, -0.2), dark)
+	var helmet := MeshInstance3D.new()
+	var helmet_mesh := SphereMesh.new()
+	helmet_mesh.radius = 0.235
+	helmet_mesh.height = 0.3
+	helmet_mesh.radial_segments = 16
+	helmet_mesh.rings = 6
+	helmet.mesh = helmet_mesh
+	helmet.position = Vector3(0, 1.69, 0.01)
+	helmet.scale.y = 0.58
+	helmet.material_override = armor
+	_body_root.add_child(helmet)
+	_add_box(Vector3(0.42, 0.44, 0.14), Vector3(0, 1.03, 0.25), armor)
 	_weapon = _add_box(Vector3(0.12, 0.13, 0.68), Vector3(0.28, 1.02, -0.42), dark)
 
 func _add_box(size: Vector3, position: Vector3, material: Material) -> MeshInstance3D:
@@ -120,3 +146,16 @@ func _material(color: Color, roughness: float, metallic: float) -> StandardMater
 	material.roughness = roughness
 	material.metallic = metallic
 	return material
+
+func _add_capsule(radius: float, height: float, position: Vector3, material: Material) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	var mesh := CapsuleMesh.new()
+	mesh.radius = radius
+	mesh.height = height
+	mesh.radial_segments = 12
+	mesh.rings = 4
+	instance.mesh = mesh
+	instance.position = position
+	instance.material_override = material
+	_body_root.add_child(instance)
+	return instance

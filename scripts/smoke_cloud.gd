@@ -18,7 +18,7 @@ func _ready() -> void:
 		mesh.rings = 7
 		puff.mesh = mesh
 		puff.position = Vector3(randf_range(-2.0, 2.0), randf_range(0.35, 1.55), randf_range(-2.0, 2.0))
-		puff.scale = Vector3.ZERO
+		puff.scale = Vector3.ONE * 0.001
 		var material := StandardMaterial3D.new()
 		material.albedo_color = Color(0.31, 0.35, 0.37, 0.76)
 		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

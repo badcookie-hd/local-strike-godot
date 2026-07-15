@@ -1,7 +1,7 @@
 class_name LocalStrikePlayer
 extends CharacterBody3D
 
-signal shot_fired(origin: Vector3, end: Vector3, hit: bool)
+signal shot_fired(origin: Vector3, end: Vector3, hit: bool, normal: Vector3, surface_type: String, actor_hit: bool)
 signal stats_changed
 signal hit_confirmed(killed: bool)
 signal player_died
@@ -42,6 +42,12 @@ var _reloading := false
 var _camera: Camera3D
 var _weapon_root: Node3D
 var _weapon_body: MeshInstance3D
+var _barrel: MeshInstance3D
+var _grip: MeshInstance3D
+var _sight: MeshInstance3D
+var _accent: MeshInstance3D
+var _left_hand: MeshInstance3D
+var _right_hand: MeshInstance3D
 var _muzzle: Marker3D
 var _muzzle_flash: MeshInstance3D
 var _muzzle_light: OmniLight3D
@@ -58,6 +64,7 @@ var _capsule: CapsuleShape3D
 func _ready() -> void:
 	collision_layer = 1
 	collision_mask = 1
+	add_to_group("damageable_actor")
 	_build_body()
 	_initialize_inventory()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -92,46 +99,49 @@ func _build_body() -> void:
 	_weapon_body.material_override = body_material
 	_weapon_root.add_child(_weapon_body)
 
-	var barrel := MeshInstance3D.new()
+	_barrel = MeshInstance3D.new()
 	var barrel_mesh := CylinderMesh.new()
 	barrel_mesh.top_radius = 0.038
 	barrel_mesh.bottom_radius = 0.048
 	barrel_mesh.height = 0.52
 	barrel_mesh.radial_segments = 12
-	barrel.mesh = barrel_mesh
-	barrel.position = Vector3(0, 0.01, -0.48)
-	barrel.rotation_degrees.x = 90.0
-	barrel.material_override = body_material
-	_weapon_root.add_child(barrel)
+	_barrel.mesh = barrel_mesh
+	_barrel.position = Vector3(0, 0.01, -0.48)
+	_barrel.rotation_degrees.x = 90.0
+	_barrel.material_override = body_material
+	_weapon_root.add_child(_barrel)
 
-	var grip := MeshInstance3D.new()
+	_grip = MeshInstance3D.new()
 	var grip_mesh := BoxMesh.new()
 	grip_mesh.size = Vector3(0.12, 0.28, 0.16)
-	grip.mesh = grip_mesh
-	grip.position = Vector3(0, -0.17, 0.12)
-	grip.rotation_degrees.x = -12.0
-	grip.material_override = body_material
-	_weapon_root.add_child(grip)
+	_grip.mesh = grip_mesh
+	_grip.position = Vector3(0, -0.17, 0.12)
+	_grip.rotation_degrees.x = -12.0
+	_grip.material_override = body_material
+	_weapon_root.add_child(_grip)
 
-	var sight := MeshInstance3D.new()
+	_sight = MeshInstance3D.new()
 	var sight_mesh := BoxMesh.new()
 	sight_mesh.size = Vector3(0.065, 0.055, 0.16)
-	sight.mesh = sight_mesh
-	sight.position = Vector3(0, 0.105, -0.12)
-	sight.material_override = body_material
-	_weapon_root.add_child(sight)
+	_sight.mesh = sight_mesh
+	_sight.position = Vector3(0, 0.105, -0.12)
+	_sight.material_override = body_material
+	_weapon_root.add_child(_sight)
 
-	var accent := MeshInstance3D.new()
+	_accent = MeshInstance3D.new()
 	var accent_mesh := BoxMesh.new()
 	accent_mesh.size = Vector3(0.08, 0.05, 0.24)
-	accent.mesh = accent_mesh
-	accent.position = Vector3(0.11, 0.08, -0.08)
+	_accent.mesh = accent_mesh
+	_accent.position = Vector3(0.11, 0.08, -0.08)
 	var accent_material := StandardMaterial3D.new()
 	accent_material.albedo_color = Color("f3b447")
 	accent_material.emission_enabled = true
 	accent_material.emission = Color("6b3b0c")
-	accent.material_override = accent_material
-	_weapon_root.add_child(accent)
+	_accent.material_override = accent_material
+	_weapon_root.add_child(_accent)
+
+	_left_hand = _create_gloved_arm(Vector3(-0.2, -0.19, -0.18), -18.0)
+	_right_hand = _create_gloved_arm(Vector3(0.12, -0.22, 0.11), -8.0)
 
 	_muzzle = Marker3D.new()
 	_muzzle.position = Vector3(0, 0, -0.76)
@@ -159,6 +169,23 @@ func _build_body() -> void:
 	_muzzle_light.omni_range = 4.5
 	_muzzle_light.shadow_enabled = false
 	_muzzle.add_child(_muzzle_light)
+
+func _create_gloved_arm(position: Vector3, rotation_z: float) -> MeshInstance3D:
+	var arm := MeshInstance3D.new()
+	var mesh := CapsuleMesh.new()
+	mesh.radius = 0.075
+	mesh.height = 0.58
+	mesh.radial_segments = 12
+	mesh.rings = 4
+	arm.mesh = mesh
+	arm.position = position
+	arm.rotation_degrees = Vector3(72, 0, rotation_z)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color("20282e")
+	material.roughness = 0.84
+	arm.material_override = material
+	_weapon_root.add_child(arm)
+	return arm
 
 func _input(event: InputEvent) -> void:
 	if not enabled:
@@ -309,9 +336,19 @@ func shoot() -> void:
 		var result := get_world_3d().direct_space_state.intersect_ray(query)
 		var hit := not result.is_empty()
 		var hit_position: Vector3 = result.position if hit else end
+		var hit_normal: Vector3 = result.normal if hit else -direction
+		var surface_type := "air"
+		var actor_hit := false
 		if hit:
 			var collider: Object = result.collider
 			var damage_target: Object = collider.get_parent() if collider is Area3D else collider
+			actor_hit = damage_target is Node and damage_target.is_in_group("damageable_actor")
+			if actor_hit:
+				surface_type = "flesh"
+			elif collider != null:
+				surface_type = str(collider.get_meta("surface_type", "concrete"))
+				if surface_type == "concrete" and damage_target != null:
+					surface_type = str(damage_target.get_meta("surface_type", "concrete"))
 			if authoritative_damage and damage_target != null and damage_target.has_method("take_damage"):
 				var hit_zone := str(collider.get_meta("hit_zone", "torso")) if collider != null else "torso"
 				var damage := spec.damage
@@ -321,7 +358,7 @@ func shoot() -> void:
 					damage *= spec.limb_multiplier
 				var killed: bool = damage_target.take_damage(damage, hit_zone)
 				hit_confirmed.emit(killed)
-		shot_fired.emit(origin, hit_position, hit)
+		shot_fired.emit(origin, hit_position, hit, hit_normal, surface_type, actor_hit)
 	_pitch = clampf(_pitch - spec.recoil_pitch, -1.35, 1.35)
 	_yaw += randf_range(-spec.recoil_yaw, spec.recoil_yaw)
 	rotation.y = _yaw
@@ -448,16 +485,68 @@ func equip_weapon(key: String, store_current := true) -> void:
 func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 	if _weapon_body == null:
 		return
+	var body_mesh := _weapon_body.mesh as BoxMesh
+	var barrel_mesh := _barrel.mesh as CylinderMesh
+	var grip_mesh := _grip.mesh as BoxMesh
+	var sight_mesh := _sight.mesh as BoxMesh
+	var body_material := _weapon_body.material_override as StandardMaterial3D
+	_weapon_root.scale = spec.view_scale
+	body_mesh.size = Vector3(0.19, 0.17, 0.64)
+	barrel_mesh.height = 0.52
+	grip_mesh.size = Vector3(0.12, 0.3, 0.16)
+	sight_mesh.size = Vector3(0.1, 0.08, 0.2)
+	_weapon_body.position = Vector3.ZERO
+	_barrel.position = Vector3(0, 0.01, -0.48)
+	_grip.position = Vector3(0, -0.16, -0.05)
+	_sight.position = Vector3(0, 0.115, -0.16)
+	_accent.position = Vector3(0.11, 0.045, -0.22)
+	_barrel.visible = true
+	_grip.visible = true
+	_sight.visible = true
+	_accent.visible = true
+	_left_hand.visible = true
+	_right_hand.visible = true
+	body_material.albedo_color = Color("303943")
 	match spec.category:
 		"melee":
-			_weapon_root.scale = Vector3(0.45, 0.55, 1.1)
+			body_mesh.size = Vector3(0.055, 0.055, 0.82)
+			_weapon_body.position = Vector3(0, 0.02, -0.22)
+			body_material.albedo_color = Color("9eabb2")
+			_barrel.visible = false
+			_sight.visible = false
+			_accent.visible = false
 		"pistol":
-			_weapon_root.scale = Vector3(0.82, 0.82, 0.72)
+			body_mesh.size = Vector3(0.16, 0.14, 0.42)
+			barrel_mesh.height = 0.3
+			_weapon_body.position = Vector3.ZERO
+			_barrel.position.z = -0.34
+			grip_mesh.size = Vector3(0.11, 0.29, 0.13)
+			_sight.visible = false
+			_accent.position = Vector3(0.09, 0.075, -0.08)
 		"shotgun":
-			_weapon_root.scale = Vector3(1.05, 1.0, 1.35)
+			body_mesh.size = Vector3(0.2, 0.18, 0.92)
+			barrel_mesh.height = 0.72
+			_barrel.position.z = -0.78
+			grip_mesh.size = Vector3(0.13, 0.34, 0.18)
+			_accent.position = Vector3(0.12, 0.06, -0.38)
 		"sniper", "dmr":
-			_weapon_root.scale = Vector3(0.95, 0.95, 1.28)
+			body_mesh.size = Vector3(0.19, 0.17, 0.94)
+			barrel_mesh.height = 0.78
+			_barrel.position.z = -0.82
+			sight_mesh.size = Vector3(0.11, 0.1, 0.34)
+			_sight.position = Vector3(0, 0.14, -0.18)
+			body_material.albedo_color = Color("28333c")
 		"frag", "smoke":
-			_weapon_root.scale = Vector3(0.62, 0.85, 0.52)
+			body_mesh.size = Vector3(0.24, 0.34, 0.24)
+			_weapon_body.position = Vector3(0, -0.03, -0.08)
+			_barrel.visible = false
+			_grip.visible = false
+			_sight.visible = false
+			_accent.position = Vector3(0.13, 0.04, -0.08)
 		_:
-			_weapon_root.scale = Vector3.ONE
+			body_mesh.size = Vector3(0.19, 0.17, 0.78 if spec.category == "rifle" else 0.64)
+			barrel_mesh.height = 0.58
+			_barrel.position.z = -0.58
+			grip_mesh.size = Vector3(0.12, 0.3, 0.16)
+			_sight.position = Vector3(0, 0.115, -0.16)
+	_muzzle.position = spec.muzzle_offset

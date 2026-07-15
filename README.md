@@ -10,7 +10,7 @@ Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt So
 - `START_GAME.cmd` startet Forward+ mit Vulkan und wechselt bei einem Startfehler automatisch zu OpenGL. Es findet Godot im Projekt oder ueber `PATH`.
 - `START_GAME_COMPATIBILITY.cmd` erzwingt den sparsamen OpenGL-Modus.
 - `OPEN_EDITOR.cmd` oeffnet das Projekt im Godot-Editor.
-- `RUN_TESTS.cmd` prueft Waffen, 5v5-Spawns, Springen, Trefferzonen, Deathmatch und LAN-Sockets.
+- `RUN_TESTS.cmd` prueft Waffen, 5v5-Spawns, Springen, Trefferzonen, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
 
 Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des Repositories. Details stehen in `engine/README.md`.
 
@@ -28,15 +28,17 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 - Kopf-, Torso- und Gliedmassen-Trefferzonen
 - Rueckstoss, Bewegungsstreuung, Ruestung, Helm und Waffen-Slots
 - Humanoide Scout-, Assault- und Heavy-Bots mit Sicht, Geraeuschsuche, Teamzielen und drei Schwierigkeitsstufen
+- Schiebetueren mit Blockierschutz, zerbrechliches Glas, ausschaltbare Lampen und explodierende Brennstoffbehaelter
 
 ## Grafik und Audio
 
-- Forward+, SSAO, Glow, Filmic Tonemapping, Nebel und dynamische Schatten
+- Forward+ mit 4x MSAA, SSAO, SSIL, SSR, Glow, volumetrischem Nebel und 4096er Schatten im Profil Hoch
 - Qualitaetsprofile Hoch, Mittel und Niedrig
-- CC0-PBR-Materialien fuer Beton und Metall sowie prozedurale Normaldetails
-- Eigene Geometrie fuer Container, Hafenkran, Zuege, Solarpanels und Laborkern
-- Muzzle Flash, Tracer, Einschlaege, Explosionen und dichter Sicht-blockierender Rauch
-- Prozedural erzeugte raeumliche Schuesse, Explosionen und Schritte
+- Korrekt verwendete CC0-ARM/ORM-PBR-Materialien fuer Beton und Metall sowie prozedurale Normaldetails
+- Eigene Geometrie fuer Container, Pfuetzen, Flutlichter, Hafenkran, Gleise, Signale, Zuege, Solarpanels und Laborkern
+- Humanoide Figuren mit animierten Armen und Beinen sowie unterschiedliche Viewmodels fuer alle Waffenkategorien
+- Oberflaechenspezifische Funken, Staub, Glassplitter, Blutnebel, Tracer, Decals, Explosionen und dichter Rauch
+- Raeumliche Kenney-CC0-Schritt-, Metall-, Glas- und Einschlagsounds; Schuesse und Explosionen besitzen einen prozeduralen Fallback
 
 Die CC0-Herkunft ist in `ASSET_LICENSES.md` dokumentiert.
 
@@ -53,7 +55,7 @@ Die CC0-Herkunft ist in `ASSET_LICENSES.md` dokumentiert.
 - `2`: Sidearm
 - `3`: Messer
 - `4`: Granate
-- `E`: Charge setzen oder entschaerfen
+- `E`: Charge setzen, entschaerfen oder nahe Tuer bedienen
 - `B`: Ausruestungsmenue
 - `Tab`: Scoreboard
 - `Escape` oder `P`: Pause

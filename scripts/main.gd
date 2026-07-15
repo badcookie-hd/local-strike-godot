@@ -7,17 +7,24 @@ const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
 const GrenadeScript = preload("res://scripts/grenade.gd")
 const SmokeScript = preload("res://scripts/smoke_cloud.gd")
 const NetworkAvatarScript = preload("res://scripts/network_avatar.gd")
+const MapDefinition = preload("res://scripts/map_definition.gd")
+const InteractableScript = preload("res://scripts/interactable.gd")
+const EffectsManagerScript = preload("res://scripts/effects_manager.gd")
+const QualityManager = preload("res://scripts/quality_manager.gd")
 const ConcreteDiffuse = preload("res://assets/textures/concrete_floor_worn_001_diff_1k.jpg")
 const ConcreteNormal = preload("res://assets/textures/concrete_floor_worn_001_normal_1k.jpg")
+const ConcreteArm = preload("res://assets/textures/concrete_floor_worn_001_arm_1k.jpg")
 const MetalDiffuse = preload("res://assets/textures/metal_plate_diff_1k.jpg")
 const MetalNormal = preload("res://assets/textures/metal_plate_normal_1k.jpg")
+const MetalArm = preload("res://assets/textures/metal_plate_arm_1k.jpg")
 
 enum Phase { BUY, LIVE, ENDED }
 
-var levels: Array[Dictionary] = []
+var levels: Array[LocalStrikeMapDefinition] = []
 var level_index := 0
-var current_level: Dictionary
+var current_level: LocalStrikeMapDefinition
 var sites: Array[Dictionary] = []
+var interactables: Dictionary = {}
 var enemies: Array[LocalStrikeEnemy] = []
 var allies: Array[LocalStrikeEnemy] = []
 var remote_avatars: Dictionary = {}
@@ -27,6 +34,7 @@ var player: LocalStrikePlayer
 var hud: LocalStrikeHUD
 var level_root: Node3D
 var effect_root: Node3D
+var effects: LocalStrikeEffectsManager
 var world_environment: WorldEnvironment
 var sun: DirectionalLight3D
 var sky_material: ProceduralSkyMaterial
@@ -74,6 +82,9 @@ func _ready() -> void:
 	effect_root = Node3D.new()
 	effect_root.name = "Effects"
 	add_child(effect_root)
+	effects = EffectsManagerScript.new()
+	effects.name = "ImpactEffects"
+	effect_root.add_child(effects)
 
 	player = PlayerScript.new()
 	player.name = "Player"
@@ -121,13 +132,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not started or paused:
 		return
+	if event.is_action_pressed("interact"):
+		_try_interact()
 	if event.is_action_pressed("toggle_buy"):
 		show_buy = not show_buy
 	if phase == Phase.BUY and event.is_action_pressed("map_next"):
 		level_index = (level_index + 1) % levels.size()
 		_load_level(level_index)
 		_spawn_teams()
-		hud.show_toast("Map: %s" % current_level.name)
+		hud.show_toast("Map: %s" % current_level.map_name)
 	if phase == Phase.BUY and event.is_action_pressed("weapon_1"):
 		_buy_weapon("sidearm")
 	elif phase == Phase.BUY and event.is_action_pressed("weapon_2"):
@@ -228,7 +241,7 @@ func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	hud.set_deployed(true)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_reset_round(false)
-	hud.show_toast("%s - %s" % ["DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else "TEAM DEATHMATCH", current_level.name], 3.2)
+	hud.show_toast("%s - %s" % ["DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else "TEAM DEATHMATCH", current_level.map_name], 3.2)
 
 func _restart_match() -> void:
 	attack_score = 0
@@ -270,7 +283,7 @@ func _reset_round(show_message: bool) -> void:
 	spectator_camera.current = false
 	_spawn_teams()
 	if show_message:
-		hud.show_toast("Round %d: %s" % [round_no, current_level.name])
+		hud.show_toast("Round %d: %s" % [round_no, current_level.map_name])
 
 func _load_level(index: int) -> void:
 	for child in level_root.get_children():
@@ -285,6 +298,7 @@ func _load_level(index: int) -> void:
 	allies.clear()
 	remote_avatars.clear()
 	sites.clear()
+	interactables.clear()
 	material_cache.clear()
 
 	current_level = levels[index]
@@ -298,6 +312,8 @@ func _load_level(index: int) -> void:
 		_create_site(site_data)
 	_create_map_beacons(current_level.palette)
 	_create_map_identity_props()
+	_create_interactables()
+	_create_reflection_probes()
 	player.reset_for_round(current_level.player_spawn)
 
 func _spawn_teams() -> void:
@@ -486,7 +502,7 @@ func _on_player_died() -> void:
 func _on_hit_confirmed(killed: bool) -> void:
 	hud.show_hit(killed)
 
-func _on_shot_fired(origin: Vector3, end: Vector3, hit: bool) -> void:
+func _on_shot_fired(origin: Vector3, end: Vector3, hit: bool, normal: Vector3, surface_type: String, actor_hit: bool) -> void:
 	AudioManager.play_shot(origin, WeaponCatalog.get_weapon(player.weapon_key).category)
 	for bot in enemies:
 		if is_instance_valid(bot): bot.hear_noise(origin, 1.0)
@@ -495,11 +511,15 @@ func _on_shot_fired(origin: Vector3, end: Vector3, hit: bool) -> void:
 		return
 	_create_tracer(origin, end, Color("ffd08a"))
 	if hit:
-		_create_burst(end, Color("ef5b5b"), 4)
+		effects.spawn_impact(end, normal, surface_type, actor_hit)
+		if not actor_hit:
+			AudioManager.play_impact(end, surface_type)
 
 func _on_enemy_shot(origin: Vector3, end: Vector3, hit: bool) -> void:
 	AudioManager.play_shot(origin, "rifle")
 	_create_tracer(origin, end, Color("ef5b5b"))
+	if hit:
+		effects.spawn_impact(end, (origin - end).normalized(), "flesh", true)
 
 func _team_alive(team: int) -> bool:
 	if player_team == team and player.health > 0.0:
@@ -644,6 +664,7 @@ func _register_client(player_name: String) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	GameSession.register_player(sender, player_name, 0)
 	_receive_match_config.rpc_id(sender, game_mode, level_index, bot_difficulty)
+	_receive_interactable_snapshot.rpc_id(sender, _serialize_interactables())
 	_sync_roster.rpc(GameSession.roster)
 	_spawn_teams()
 
@@ -661,6 +682,89 @@ func _receive_match_config(mode: int, map_index: int, difficulty: int) -> void:
 func _sync_roster(next_roster: Dictionary) -> void:
 	GameSession.roster = next_roster.duplicate(true)
 	GameSession.roster_changed.emit(GameSession.roster)
+
+func _try_interact() -> void:
+	var nearest: LocalStrikeInteractable
+	var nearest_distance := 2.2
+	for candidate in interactables.values():
+		if not is_instance_valid(candidate) or candidate.kind != LocalStrikeInteractable.Kind.DOOR:
+			continue
+		var distance := player.global_position.distance_to(candidate.global_position)
+		if distance < nearest_distance:
+			nearest = candidate
+			nearest_distance = distance
+	if nearest == null:
+		return
+	if _is_network_client():
+		_request_interaction.rpc_id(1, nearest.interactable_id)
+	elif nearest.interact():
+		hud.show_toast("Door opened" if nearest.opened else "Door closed", 1.2)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_interaction(interactable_id: String) -> void:
+	if not multiplayer.is_server() or not interactables.has(interactable_id):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var avatar: Node3D = remote_avatars.get(sender)
+	var interactive: LocalStrikeInteractable = interactables[interactable_id]
+	if not is_instance_valid(avatar) or avatar.global_position.distance_to(interactive.global_position) > 2.4:
+		return
+	interactive.interact()
+
+@rpc("authority", "call_remote", "reliable")
+func _sync_interactable_state(interactable_id: String, state: Dictionary) -> void:
+	if interactables.has(interactable_id) and is_instance_valid(interactables[interactable_id]):
+		interactables[interactable_id].apply_state(state)
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_interactable_snapshot(snapshot: Dictionary) -> void:
+	for interactable_id in snapshot:
+		if interactables.has(interactable_id) and is_instance_valid(interactables[interactable_id]):
+			interactables[interactable_id].apply_state(snapshot[interactable_id])
+
+func _serialize_interactables() -> Dictionary:
+	var snapshot := {}
+	for interactable_id in interactables:
+		var interactive: LocalStrikeInteractable = interactables[interactable_id]
+		if is_instance_valid(interactive):
+			snapshot[interactable_id] = interactive.serialize_state()
+	return snapshot
+
+func _on_interactable_state_changed(interactable_id: String, state: Dictionary) -> void:
+	if NetworkManager.peer != null and multiplayer.is_server():
+		_sync_interactable_state.rpc(interactable_id, state)
+
+func _on_interactable_effect(position: Vector3, normal: Vector3, surface_type: String, _effect_kind: String) -> void:
+	effects.spawn_impact(position, normal, surface_type, false)
+	AudioManager.play_impact(position, surface_type, _effect_kind == "shatter")
+
+func _on_interactable_exploded(interactive: LocalStrikeInteractable, position: Vector3, damage: float, radius: float) -> void:
+	_create_burst(position + Vector3.UP * 0.45, Color("ff8a38"), 34)
+	AudioManager.play_explosion(position)
+	if _is_network_client():
+		return
+	_apply_radial_damage(position, damage, radius, interactive)
+
+func _apply_radial_damage(position: Vector3, damage: float, radius: float, excluded: Object = null) -> void:
+	var sphere := SphereShape3D.new()
+	sphere.radius = radius
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = sphere
+	query.transform = Transform3D(Basis.IDENTITY, position)
+	query.collision_mask = 3
+	var damaged_targets: Dictionary = {}
+	for result in get_world_3d().direct_space_state.intersect_shape(query, 32):
+		var target: Object = result.collider
+		if target == null or target == excluded or damaged_targets.has(target.get_instance_id()):
+			continue
+		damaged_targets[target.get_instance_id()] = true
+		if target.has_method("apply_damage") or target.has_method("take_damage"):
+			var target_position: Vector3 = target.global_position
+			var applied_damage := damage * clampf(1.0 - position.distance_to(target_position) / radius, 0.15, 1.0)
+			if target.has_method("apply_damage"):
+				target.apply_damage(applied_damage, "torso")
+			else:
+				target.take_damage(applied_damage, "torso")
 
 func _update_network_state(delta: float) -> void:
 	if NetworkManager.peer == null:
@@ -723,21 +827,28 @@ func _request_network_shot(origin: Vector3, requested_end: Vector3, weapon_key: 
 	query.collide_with_areas = true
 	var result := get_world_3d().direct_space_state.intersect_ray(query)
 	var hit_position: Vector3 = result.position if not result.is_empty() else end
+	var hit_normal: Vector3 = result.normal if not result.is_empty() else -direction
+	var surface_type := "air"
+	var actor_hit := false
 	if not result.is_empty():
 		var collider: Object = result.collider
 		var target: Object = collider.get_parent() if collider is Area3D else collider
+		actor_hit = target is Node and target.is_in_group("damageable_actor")
+		surface_type = "flesh" if actor_hit else str(collider.get_meta("surface_type", target.get_meta("surface_type", "concrete") if target != null else "concrete"))
 		if target != null and target.has_method("take_damage"):
 			var zone := str(collider.get_meta("hit_zone", "torso"))
 			var applied_damage := spec.damage * (spec.head_multiplier if zone == "head" else (spec.limb_multiplier if zone == "limb" else 1.0))
 			target.take_damage(applied_damage, zone)
-	_network_shot_effect.rpc(origin, hit_position, not result.is_empty())
-	_network_shot_effect(origin, hit_position, not result.is_empty())
+	_network_shot_effect.rpc(origin, hit_position, hit_normal, surface_type, actor_hit)
+	_network_shot_effect(origin, hit_position, hit_normal, surface_type, actor_hit)
 
 @rpc("authority", "call_remote", "unreliable", 2)
-func _network_shot_effect(origin: Vector3, end: Vector3, hit: bool) -> void:
+func _network_shot_effect(origin: Vector3, end: Vector3, normal: Vector3, surface_type: String, actor_hit: bool) -> void:
 	_create_tracer(origin, end, Color("ffd08a"))
-	if hit:
-		_create_burst(end, Color("ef5b5b"), 4)
+	if surface_type != "air":
+		effects.spawn_impact(end, normal, surface_type, actor_hit)
+		if not actor_hit:
+			AudioManager.play_impact(end, surface_type)
 
 func _build_environment() -> void:
 	world_environment = WorldEnvironment.new()
@@ -759,8 +870,17 @@ func _build_environment() -> void:
 	environment.ssao_enabled = true
 	environment.ssao_radius = 1.8
 	environment.ssao_intensity = 2.1
+	environment.ssil_enabled = RenderingServer.get_current_rendering_method() != "gl_compatibility"
+	environment.ssil_radius = 3.0
+	environment.ssil_intensity = 1.25
+	environment.ssr_enabled = RenderingServer.get_current_rendering_method() != "gl_compatibility"
+	environment.ssr_max_steps = 48
 	environment.glow_enabled = true
 	environment.glow_intensity = 0.7
+	environment.volumetric_fog_enabled = RenderingServer.get_current_rendering_method() != "gl_compatibility"
+	environment.volumetric_fog_density = 0.018
+	environment.volumetric_fog_length = 48.0
+	environment.volumetric_fog_detail_spread = 1.6
 	world_environment.environment = environment
 	add_child(world_environment)
 
@@ -781,41 +901,38 @@ func _update_environment(palette: Dictionary) -> void:
 	sky_material.ground_bottom_color = palette.floor.darkened(0.45)
 	sky_material.ground_horizon_color = palette.background.lightened(0.08)
 	sun.light_color = palette.sun
+	match current_level.environment_profile:
+		"harbor_sunset":
+			sun.rotation_degrees = Vector3(-38, -54, 0)
+			sun.light_energy = 1.42
+			environment.ambient_light_energy = 0.58
+			environment.fog_density = 0.006
+			environment.volumetric_fog_density = 0.012
+		"depot_overcast":
+			sun.rotation_degrees = Vector3(-61, 22, 0)
+			sun.light_energy = 0.92
+			sun.light_color = Color("d8e4ee")
+			environment.ambient_light_energy = 0.82
+			environment.fog_density = 0.011
+			environment.volumetric_fog_density = 0.018
+		"solar_interior":
+			sun.rotation_degrees = Vector3(-72, -18, 0)
+			sun.light_energy = 0.48
+			sun.light_color = Color("9db9dd")
+			environment.ambient_light_energy = 0.46
+			environment.fog_density = 0.014
+			environment.volumetric_fog_density = 0.026
 
 func _apply_quality(index: int) -> void:
 	current_quality = clampi(index, 0, 2)
-	var viewport := get_viewport()
-	match current_quality:
-		0:
-			viewport.msaa_3d = Viewport.MSAA_4X
-			viewport.scaling_3d_scale = 1.0
-			viewport.positional_shadow_atlas_size = 4096
-			sun.shadow_enabled = true
-			world_environment.environment.ssao_enabled = true
-			world_environment.environment.glow_enabled = true
-			world_environment.environment.fog_enabled = true
-		1:
-			viewport.msaa_3d = Viewport.MSAA_2X
-			viewport.scaling_3d_scale = 0.9
-			viewport.positional_shadow_atlas_size = 2048
-			sun.shadow_enabled = true
-			world_environment.environment.ssao_enabled = true
-			world_environment.environment.glow_enabled = false
-			world_environment.environment.fog_enabled = true
-		_:
-			viewport.msaa_3d = Viewport.MSAA_DISABLED
-			viewport.scaling_3d_scale = 0.78
-			viewport.positional_shadow_atlas_size = 1024
-			sun.shadow_enabled = false
-			world_environment.environment.ssao_enabled = false
-			world_environment.environment.glow_enabled = false
-			world_environment.environment.fog_enabled = false
+	QualityManager.apply_profile(get_viewport(), world_environment.environment, sun, current_quality, effects)
 	hud.show_toast("Graphics quality: %s" % ["HIGH", "MEDIUM", "LOW"][current_quality])
 
 func _create_floor(palette: Dictionary) -> void:
 	var floor := StaticBody3D.new()
 	floor.name = "Floor"
 	floor.collision_layer = 1
+	floor.set_meta("surface_type", "concrete")
 	level_root.add_child(floor)
 	var mesh_instance := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
@@ -835,6 +952,7 @@ func _create_wall(data: Dictionary, palette: Dictionary) -> void:
 	var height := 1.65 if data.kind == "crate" else 3.1
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
+	body.set_meta("surface_type", "metal" if data.kind == "crate" else "concrete")
 	body.position = Vector3(data.rect.position.x, height / 2.0, data.rect.position.y)
 	level_root.add_child(body)
 	var mesh_instance := MeshInstance3D.new()
@@ -965,21 +1083,138 @@ func _create_map_identity_props() -> void:
 			_create_identity_box(Vector3(-12.5, 1.25, 4.8), Vector3(5.2, 2.5, 2.4), Color("315d6f"))
 			_create_identity_box(Vector3(11.8, 1.25, -2.0), Vector3(5.4, 2.5, 2.4), Color("8a4b35"))
 			_create_crane(Vector3(-13.8, 0, -2.5))
+			_create_puddle(Vector3(-5.2, 0.008, 10.2), Vector2(5.4, 2.2), Color("6d8792"))
+			_create_puddle(Vector3(7.8, 0.008, -11.0), Vector2(3.8, 1.4), Color("586e79"))
+			_create_floodlight(Vector3(13.8, 0, 12.8), Vector3(-5, 0.8, 3), Color("ffe2ae"))
+			_create_floodlight(Vector3(-13.8, 0, -13.2), Vector3(4, 0.5, -2), Color("b8dcff"))
 			for position in [Vector3(-14.1, 0.45, 8.2), Vector3(-13.2, 0.45, 8.5), Vector3(13.6, 0.45, -9.2)]:
 				_create_barrel(position, Color("d89b3c"))
 		1:
 			_create_train_car(Vector3(-11.0, 1.15, 1.5), Color("6d3f31"))
 			_create_train_car(Vector3(10.8, 1.15, -2.2), Color("415968"))
+			_create_station_canopy(Vector3(0, 0, 12.7))
+			_create_signal(Vector3(-6.6, 0, -12.6), Color("ef5b5b"))
+			_create_signal(Vector3(6.6, 0, 12.6), Color("6de4a5"))
 			for z in [-13.0, -7.0, -1.0, 5.0, 11.0]:
 				_add_rail_sleeper(z)
 		2:
 			_create_lab_core(Vector3.ZERO)
+			for z in [-12.2, -4.2, 4.2, 12.2]:
+				_create_lab_arch(Vector3(0, 0, z))
+			_create_display_panel(Vector3(-14.8, 1.35, -3.2), 90.0, Color("56d8c5"))
+			_create_display_panel(Vector3(14.8, 1.35, 3.2), -90.0, Color("9777ff"))
 			for position in [Vector3(-11.8, 0.65, -5.0), Vector3(-11.8, 0.65, 5.0), Vector3(11.8, 0.65, -5.0), Vector3(11.8, 0.65, 5.0)]:
 				_create_solar_panel(position)
+
+func _create_puddle(position: Vector3, size: Vector2, color: Color) -> void:
+	var puddle := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(size.x, 0.012, size.y)
+	puddle.mesh = mesh
+	puddle.position = position
+	var material := _plain_material(Color(color, 0.62), 0.08, 0.18)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	puddle.material_override = material
+	level_root.add_child(puddle)
+
+func _create_floodlight(position: Vector3, target: Vector3, color: Color) -> void:
+	var root := Node3D.new()
+	root.position = position
+	level_root.add_child(root)
+	_add_detail_box(root, Vector3(0.16, 4.8, 0.16), Vector3(0, 2.4, 0), Color("303940"), 0.42, 0.72)
+	_add_detail_box(root, Vector3(0.72, 0.34, 0.24), Vector3(0, 4.75, 0), Color("d4d9d7"), 0.26, 0.48, true)
+	var light := SpotLight3D.new()
+	light.position = Vector3(0, 4.7, 0)
+	light.light_color = color
+	light.light_energy = 4.2
+	light.spot_range = 18.0
+	light.spot_angle = 34.0
+	light.shadow_enabled = current_quality == 0
+	root.add_child(light)
+	light.look_at(target, Vector3.UP)
+
+func _create_station_canopy(position: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = position
+	level_root.add_child(root)
+	_add_detail_box(root, Vector3(18.0, 0.18, 2.4), Vector3(0, 3.0, 0), Color("3c454b"), 0.58, 0.52)
+	for x in [-8.0, -4.0, 0.0, 4.0, 8.0]:
+		_add_detail_box(root, Vector3(0.16, 3.0, 0.16), Vector3(x, 1.5, 0), Color("252c31"), 0.42, 0.68)
+
+func _create_signal(position: Vector3, color: Color) -> void:
+	var root := Node3D.new()
+	root.position = position
+	level_root.add_child(root)
+	_add_detail_box(root, Vector3(0.12, 3.2, 0.12), Vector3(0, 1.6, 0), Color("242a2e"), 0.48, 0.7)
+	_add_detail_box(root, Vector3(0.44, 0.58, 0.3), Vector3(0, 3.12, 0), Color("1b2024"), 0.38, 0.65)
+	var lens := MeshInstance3D.new()
+	var lens_mesh := SphereMesh.new()
+	lens_mesh.radius = 0.12
+	lens_mesh.height = 0.24
+	lens.mesh = lens_mesh
+	lens.position = Vector3(0, 3.18, -0.17)
+	lens.material_override = _glow_material(color, 3.2)
+	root.add_child(lens)
+
+func _create_lab_arch(position: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = position
+	level_root.add_child(root)
+	for x in [-6.4, 6.4]:
+		_add_detail_box(root, Vector3(0.28, 4.0, 0.3), Vector3(x, 2.0, 0), Color("34445b"), 0.36, 0.62)
+	_add_detail_box(root, Vector3(13.1, 0.28, 0.3), Vector3(0, 3.9, 0), Color("34445b"), 0.36, 0.62)
+	_add_detail_box(root, Vector3(11.8, 0.08, 0.12), Vector3(0, 3.72, 0), Color("56d8c5"), 0.18, 0.05, true)
+
+func _create_display_panel(position: Vector3, rotation_y: float, color: Color) -> void:
+	var root := Node3D.new()
+	root.position = position
+	root.rotation_degrees.y = rotation_y
+	level_root.add_child(root)
+	_add_detail_box(root, Vector3(0.08, 1.45, 2.1), Vector3.ZERO, Color("17232d"), 0.38, 0.62)
+	for y in [-0.42, 0.0, 0.42]:
+		_add_detail_box(root, Vector3(0.045, 0.25, 1.65), Vector3(-0.06, y, 0), color.darkened(absf(y) * 0.5), 0.18, 0.02, true)
+
+func _create_interactables() -> void:
+	for data in current_level.interactables:
+		var interactive: LocalStrikeInteractable = InteractableScript.new()
+		interactive.configure(data)
+		interactive.position = data.get("position", Vector3.ZERO)
+		interactive.rotation_degrees.y = float(data.get("rotation_y", 0.0))
+		interactive.state_changed.connect(_on_interactable_state_changed)
+		interactive.exploded.connect(_on_interactable_exploded)
+		interactive.effect_requested.connect(_on_interactable_effect)
+		level_root.add_child(interactive)
+		interactables[interactive.interactable_id] = interactive
+		if interactive.kind == LocalStrikeInteractable.Kind.DOOR:
+			_create_door_frame(interactive.position, float(data.get("rotation_y", 0.0)), interactive.size, data.get("color", Color("52616b")))
+
+func _create_door_frame(position: Vector3, rotation_y: float, size: Vector3, color: Color) -> void:
+	var frame := Node3D.new()
+	frame.position = position
+	frame.rotation_degrees.y = rotation_y
+	level_root.add_child(frame)
+	var dark := color.darkened(0.55)
+	_add_detail_box(frame, Vector3(0.14, size.y + 0.28, size.z + 0.18), Vector3(-size.x * 0.56, 0, 0), dark, 0.32, 0.72)
+	_add_detail_box(frame, Vector3(0.14, size.y + 0.28, size.z + 0.18), Vector3(size.x * 0.56, 0, 0), dark, 0.32, 0.72)
+	_add_detail_box(frame, Vector3(size.x + 0.32, 0.14, size.z + 0.18), Vector3(0, size.y * 0.55, 0), dark, 0.32, 0.72)
+
+func _create_reflection_probes() -> void:
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility" or current_quality == 2:
+		return
+	for data in current_level.reflection_zones:
+		var probe := ReflectionProbe.new()
+		probe.position = data.get("position", Vector3(0, 2.0, 0))
+		probe.size = data.get("size", Vector3(12, 5, 12))
+		probe.box_projection = true
+		probe.intensity = float(data.get("intensity", 0.7))
+		probe.max_distance = 36.0
+		probe.enable_shadows = false
+		level_root.add_child(probe)
 
 func _create_identity_box(position: Vector3, size: Vector3, color: Color) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
+	body.set_meta("surface_type", "metal")
 	body.position = position
 	level_root.add_child(body)
 	var mesh_instance := MeshInstance3D.new()
@@ -1104,41 +1339,10 @@ func _create_charge(position: Vector3) -> Node3D:
 	return root
 
 func _create_tracer(origin: Vector3, end: Vector3, color: Color) -> void:
-	var distance := origin.distance_to(end)
-	if distance <= 0.05:
-		return
-	var tracer := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.018, 0.018, distance)
-	tracer.mesh = mesh
-	var material := _plain_material(color, 0.1, 0.0)
-	material.emission_enabled = true
-	material.emission = color
-	tracer.material_override = material
-	effect_root.add_child(tracer)
-	tracer.look_at_from_position((origin + end) / 2.0, end, Vector3.UP)
-	var tween := tracer.create_tween()
-	tween.tween_property(tracer, "scale", Vector3(0.2, 0.2, 1.0), 0.065)
-	tween.tween_callback(tracer.queue_free)
+	effects.spawn_tracer(origin, end, color)
 
 func _create_burst(position: Vector3, color: Color, count: int) -> void:
-	for i in range(count):
-		var particle := MeshInstance3D.new()
-		var mesh := SphereMesh.new()
-		mesh.radius = randf_range(0.025, 0.055)
-		mesh.height = mesh.radius * 2.0
-		particle.mesh = mesh
-		particle.position = position
-		var material := _plain_material(color, 0.2, 0.0)
-		material.emission_enabled = true
-		material.emission = color * 0.7
-		particle.material_override = material
-		effect_root.add_child(particle)
-		var target := position + Vector3(randf_range(-1.2, 1.2), randf_range(0.2, 1.6), randf_range(-1.2, 1.2))
-		var tween := particle.create_tween()
-		tween.tween_property(particle, "position", target, randf_range(0.22, 0.48))
-		tween.parallel().tween_property(particle, "scale", Vector3.ZERO, 0.48)
-		tween.tween_callback(particle.queue_free)
+	effects.spawn_burst(position, color, count, 1.35)
 
 func _material(color: Color, pattern: int) -> StandardMaterial3D:
 	var key := "%s:%d" % [color.to_html(), pattern]
@@ -1152,6 +1356,15 @@ func _material(color: Color, pattern: int) -> StandardMaterial3D:
 	material.normal_scale = 0.52
 	material.roughness = 0.82 if pattern != 2 else 0.68
 	material.metallic = 0.05 if pattern != 3 else 0.25
+	if pattern in [0, 2]:
+		var arm_texture: Texture2D = ConcreteArm if pattern == 0 else MetalArm
+		material.ao_enabled = true
+		material.ao_texture = arm_texture
+		material.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		material.roughness_texture = arm_texture
+		material.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
+		material.metallic_texture = arm_texture
+		material.metallic_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_BLUE
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	material.uv1_scale = Vector3(3.0, 3.0, 3.0)
 	material.uv1_triplanar = true
@@ -1213,7 +1426,7 @@ func _procedural_normal_texture(pattern: int) -> ImageTexture:
 	return texture
 
 func _update_hud() -> void:
-	if hud == null or player == null or current_level.is_empty():
+	if hud == null or player == null or current_level == null:
 		return
 	var phase_text := "DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("BUY" if phase == Phase.BUY else ("ROUND END" if phase == Phase.ENDED else ("PLANTED" if charge_planted else "LIVE")))
 	var charge_text := "FREE LOADOUT" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("DEFEND" if player_team == 1 else "CARRIED")
@@ -1232,7 +1445,7 @@ func _update_hud() -> void:
 	hud.update_state({
 		"map_index": level_index,
 		"map_count": levels.size(),
-		"map_name": current_level.name,
+		"map_name": current_level.map_name,
 		"phase": phase_text,
 		"time": _format_time(bomb_timer if charge_planted else phase_timer),
 		"attack_score": attack_score,
@@ -1302,8 +1515,8 @@ func _add_key_action(action: StringName, key: Key) -> void:
 	if not InputMap.action_has_event(action, event):
 		InputMap.action_add_event(action, event)
 
-func _create_levels() -> Array[Dictionary]:
-	return [
+func _create_levels() -> Array[LocalStrikeMapDefinition]:
+	var data := [
 		{
 			"name": "HARBOR YARD",
 			"player_spawn": Vector3(0, 0.05, 12),
@@ -1316,7 +1529,15 @@ func _create_levels() -> Array[Dictionary]:
 			"sites": [_site("A", -10, -10, 3.1, Color("56d8c5")), _site("B", 10, 8, 3.1, Color("f3b447"))],
 			"bot_spawns": [Vector3(-11, 0.05, -11), Vector3(11, 0.05, -9), Vector3(10, 0.05, 7), Vector3(-9, 0.05, 8), Vector3(0, 0.05, -13)],
 			"patrols": [Vector3(-12, 0, -8), Vector3(-4, 0, -3), Vector3(5, 0, -10), Vector3(12, 0, 4), Vector3(-11, 0, 9), Vector3.ZERO],
-			"props": [_prop(-13, -12, 4.2, 0.4, Color("f3b447")), _prop(12, 10.8, 3.5, 0.4, Color("56d8c5"))]
+			"props": [_prop(-13, -12, 4.2, 0.4, Color("f3b447")), _prop(12, 10.8, 3.5, 0.4, Color("56d8c5"))],
+			"environment_profile": "harbor_sunset",
+			"reflection_zones": [_reflection(Vector3(-8, 2.2, 4), Vector3(13, 5, 11)), _reflection(Vector3(9, 2.2, -5), Vector3(11, 5, 13))],
+			"interactables": [
+				_interactive("harbor_door", LocalStrikeInteractable.Kind.DOOR, Vector3(2.8, 1.25, -5.3), Vector3(1.75, 2.5, 0.2), Color("3e6372")),
+				_interactive("harbor_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-10.8, 1.15, 5.8), Vector3(2.8, 1.55, 0.07), Color("83c6d3"), 90.0),
+				_interactive("harbor_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(8.8, 2.65, 5.8)),
+				_interactive("harbor_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(-13.4, 0.5, 8.5))
+			]
 		},
 		{
 			"name": "TRAIN DEPOT",
@@ -1330,7 +1551,15 @@ func _create_levels() -> Array[Dictionary]:
 			"sites": [_site("A", -12, -10, 3.0, Color("ef5b5b")), _site("B", 11.5, 10.2, 3.0, Color("f3b447"))],
 			"bot_spawns": [Vector3(12, 0.05, -12), Vector3(12, 0.05, 1), Vector3(4, 0.05, -13), Vector3(-4, 0.05, -12), Vector3(13, 0.05, 10)],
 			"patrols": [Vector3(-12, 0, -10), Vector3(-10, 0, 4), Vector3(-2, 0, 12), Vector3(8, 0, 12), Vector3(12, 0, -8), Vector3(2, 0, 0)],
-			"props": [_prop(-10.8, -2.2, 0.36, 23, Color("d88842")), _prop(10.8, 2.2, 0.36, 23, Color("d88842"))]
+			"props": [_prop(-10.8, -2.2, 0.36, 23, Color("d88842")), _prop(10.8, 2.2, 0.36, 23, Color("d88842"))],
+			"environment_profile": "depot_overcast",
+			"reflection_zones": [_reflection(Vector3(-10, 2.1, 1), Vector3(8, 5, 18)), _reflection(Vector3(10, 2.1, -2), Vector3(8, 5, 18))],
+			"interactables": [
+				_interactive("depot_door", LocalStrikeInteractable.Kind.DOOR, Vector3(1.3, 1.25, 4.5), Vector3(1.65, 2.5, 0.2), Color("6b4d3d"), 90.0),
+				_interactive("depot_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-5.7, 1.2, 11.2), Vector3(2.6, 1.55, 0.07), Color("b1ced4")),
+				_interactive("depot_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(6.0, 2.7, 8.2)),
+				_interactive("depot_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(13.5, 0.5, -9.0))
+			]
 		},
 		{
 			"name": "SOLAR LAB",
@@ -1344,9 +1573,21 @@ func _create_levels() -> Array[Dictionary]:
 			"sites": [_site("A", -11.2, 10.8, 3.05, Color("9777ff")), _site("B", 11.2, -10.8, 3.05, Color("56d8c5"))],
 			"bot_spawns": [Vector3(-12, 0.05, -12), Vector3(12, 0.05, 12), Vector3(11, 0.05, 1), Vector3(-11, 0.05, -1), Vector3(0, 0.05, -12.5)],
 			"patrols": [Vector3(-11, 0, 10), Vector3(-4, 0, 4), Vector3.ZERO, Vector3(4, 0, -4), Vector3(11, 0, -10), Vector3(12, 0, 8), Vector3(-12, 0, -8)],
-			"props": [_prop(0, 0, 7, 0.35, Color("9777ff")), _prop(0, 0, 0.35, 7, Color("56d8c5"))]
+			"props": [_prop(0, 0, 7, 0.35, Color("9777ff")), _prop(0, 0, 0.35, 7, Color("56d8c5"))],
+			"environment_profile": "solar_interior",
+			"reflection_zones": [_reflection(Vector3.ZERO + Vector3.UP * 2.0, Vector3(15, 6, 15)), _reflection(Vector3(10, 2.0, -9), Vector3(9, 5, 9))],
+			"interactables": [
+				_interactive("lab_door", LocalStrikeInteractable.Kind.DOOR, Vector3(-4.2, 1.25, -3.5), Vector3(1.7, 2.5, 0.2), Color("465a77"), 90.0),
+				_interactive("lab_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(4.2, 1.2, 4.6), Vector3(3.2, 1.65, 0.07), Color("8fddea"), 90.0),
+				_interactive("lab_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(-9.0, 2.75, 8.0)),
+				_interactive("lab_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(12.8, 0.5, 3.8), Vector3(0.58, 0.95, 0.58), Color("a7445f"))
+			]
 		}
 	]
+	var definitions: Array[LocalStrikeMapDefinition] = []
+	for entry in data:
+		definitions.append(MapDefinition.create(entry))
+	return definitions
 
 func _with_borders(inner: Array) -> Array:
 	var walls := [
@@ -1364,6 +1605,17 @@ func _site(name: String, x: float, z: float, radius: float, color: Color) -> Dic
 
 func _prop(x: float, z: float, width: float, depth: float, color: Color) -> Dictionary:
 	return {"rect": Rect2(Vector2(x, z), Vector2(width, depth)), "color": color}
+
+func _interactive(id: String, kind: int, position: Vector3, size := Vector3.ZERO, color := Color.WHITE, rotation_y := 0.0) -> Dictionary:
+	var data := {"id": id, "kind": kind, "position": position, "rotation_y": rotation_y}
+	if size != Vector3.ZERO:
+		data["size"] = size
+	if color != Color.WHITE:
+		data["color"] = color
+	return data
+
+func _reflection(position: Vector3, size: Vector3, intensity := 0.72) -> Dictionary:
+	return {"position": position, "size": size, "intensity": intensity}
 
 func _palette(background: Color, floor: Color, wall: Color, crate: Color, ambient: Color) -> Dictionary:
 	return {"background": background, "floor": floor, "wall": wall, "crate": crate, "ambient": ambient, "sun": Color("ffe0b0")}

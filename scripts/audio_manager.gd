@@ -1,5 +1,7 @@
 extends Node
 
+const KENNEY_ROOT := "res://assets/audio/kenney_impact/"
+
 var _cache: Dictionary = {}
 
 func play_shot(position: Vector3, category := "rifle") -> void:
@@ -16,8 +18,23 @@ func play_explosion(position: Vector3) -> void:
 
 func play_footstep(position: Vector3) -> void:
 	if not _cache.has("footstep"):
-		_cache.footstep = _make_noise_burst(0.075, 88.0, 0.34)
+		_cache.footstep = _load_stream("footstep_concrete_000.ogg")
+		if _cache.footstep == null:
+			_cache.footstep = _make_noise_burst(0.075, 88.0, 0.34)
 	_play_3d(_cache.footstep, position, -12.0, 18.0)
+
+func play_impact(position: Vector3, surface_type: String, heavy := false) -> void:
+	var filename := "impactGeneric_light_000.ogg"
+	if surface_type == "metal":
+		filename = "impactMetal_medium_000.ogg"
+	elif surface_type == "glass":
+		filename = "impactGlass_heavy_000.ogg" if heavy else "impactGlass_light_000.ogg"
+	var key := "impact_%s_%s" % [surface_type, heavy]
+	if not _cache.has(key):
+		_cache[key] = _load_stream(filename)
+		if _cache[key] == null:
+			_cache[key] = _make_noise_burst(0.09, 420.0 if surface_type == "glass" else 180.0, 0.55)
+	_play_3d(_cache[key], position, -8.0 if heavy else -13.0, 24.0)
 
 func play_ui() -> void:
 	if not _cache.has("ui"):
@@ -39,6 +56,12 @@ func _play_3d(stream: AudioStream, position: Vector3, volume_db: float, max_dist
 	add_child(player)
 	player.finished.connect(player.queue_free)
 	player.play()
+
+func _load_stream(filename: String) -> AudioStream:
+	var path := KENNEY_ROOT + filename
+	if not ResourceLoader.exists(path):
+		return null
+	return load(path) as AudioStream
 
 func _make_noise_burst(duration: float, frequency: float, volume: float) -> AudioStreamWAV:
 	var rate := 22050

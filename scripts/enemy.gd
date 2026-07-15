@@ -48,6 +48,7 @@ var _walk_phase := 0.0
 func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 1
+	add_to_group("damageable_actor")
 	_apply_profile()
 	_build_collision()
 	_build_visual()
@@ -131,15 +132,20 @@ func _build_visual() -> void:
 
 	_add_box(_body_root, Vector3(radius * 1.55, 0.58, radius * 0.92), Vector3(0, 1.04, 0), _torso_material)
 	_add_box(_body_root, Vector3(radius * 1.72, 0.34, radius * 1.02), Vector3(0, 1.12, -0.015), armor_material)
+	_add_box(_body_root, Vector3(radius * 1.5, 0.14, radius * 0.98), Vector3(0, 0.78, 0.02), armor_material)
 	var head := _add_sphere(_body_root, radius * 0.62, Vector3(0, 1.53, 0), _material(Color("a98a72"), 0.72, 0.0))
 	head.scale.y = 1.08
 	_add_box(_body_root, Vector3(radius * 1.2, 0.13, 0.075), Vector3(0, 1.56, -radius * 0.62), visor_material)
-	_add_box(_body_root, Vector3(radius * 1.3, 0.12, radius * 1.15), Vector3(0, 1.72, 0), armor_material)
+	var helmet := _add_sphere(_body_root, radius * 0.67, Vector3(0, 1.68, 0.02), armor_material)
+	helmet.scale.y = 0.55
+	_add_box(_body_root, Vector3(radius * 0.92, 0.48, radius * 0.32), Vector3(0, 1.04, radius * 0.63), armor_material)
 
-	_left_leg = _add_box(_body_root, Vector3(radius * 0.52, 0.78, radius * 0.58), Vector3(-radius * 0.38, 0.42, 0), fabric_material)
-	_right_leg = _add_box(_body_root, Vector3(radius * 0.52, 0.78, radius * 0.58), Vector3(radius * 0.38, 0.42, 0), fabric_material)
-	_left_arm = _add_box(_body_root, Vector3(radius * 0.42, 0.66, radius * 0.44), Vector3(-radius * 1.02, 1.04, -0.05), fabric_material)
-	_right_arm = _add_box(_body_root, Vector3(radius * 0.42, 0.66, radius * 0.44), Vector3(radius * 1.02, 1.04, -0.05), fabric_material)
+	_left_leg = _add_capsule(_body_root, radius * 0.29, 0.82, Vector3(-radius * 0.38, 0.42, 0), fabric_material)
+	_right_leg = _add_capsule(_body_root, radius * 0.29, 0.82, Vector3(radius * 0.38, 0.42, 0), fabric_material)
+	_left_arm = _add_capsule(_body_root, radius * 0.23, 0.7, Vector3(-radius * 1.02, 1.04, -0.05), fabric_material)
+	_right_arm = _add_capsule(_body_root, radius * 0.23, 0.7, Vector3(radius * 1.02, 1.04, -0.05), fabric_material)
+	_add_box(_body_root, Vector3(radius * 0.5, 0.16, radius * 0.56), Vector3(-radius * 0.96, 1.29, 0), armor_material)
+	_add_box(_body_root, Vector3(radius * 0.5, 0.16, radius * 0.56), Vector3(radius * 0.96, 1.29, 0), armor_material)
 	_left_arm.rotation_degrees.x = -18.0
 	_right_arm.rotation_degrees.x = -34.0
 
@@ -159,6 +165,8 @@ func _build_visual() -> void:
 	_muzzle = Marker3D.new()
 	_muzzle.position = Vector3(radius * 0.58, 1.04, -radius * 1.95)
 	_body_root.add_child(_muzzle)
+	for x in [-0.22, 0.0, 0.22]:
+		_add_box(_body_root, Vector3(0.16, 0.22, 0.09), Vector3(x, 0.92, -radius * 0.58), _material(_kind_color().lightened(0.16), 0.62, 0.08))
 
 func _build_navigation() -> void:
 	_navigation = NavigationAgent3D.new()
@@ -296,7 +304,7 @@ func take_damage(amount: float, hit_zone := "torso") -> bool:
 		tween.tween_property(_body_root, "rotation_degrees", Vector3(82, randf_range(-20, 20), randf_range(-18, 18)), 0.24)
 		tween.parallel().tween_property(_body_root, "position:y", 0.2, 0.24)
 		tween.tween_interval(1.4)
-		tween.tween_property(self, "scale", Vector3.ZERO, 0.25)
+		tween.tween_property(self, "scale", Vector3.ONE * 0.001, 0.25)
 		tween.tween_callback(queue_free)
 		return true
 	return false
@@ -376,6 +384,19 @@ func _add_sphere(parent: Node3D, radius_value: float, position: Vector3, materia
 	mesh.height = radius_value * 2.0
 	mesh.radial_segments = 16
 	mesh.rings = 8
+	mesh_instance.mesh = mesh
+	mesh_instance.position = position
+	mesh_instance.material_override = material
+	parent.add_child(mesh_instance)
+	return mesh_instance
+
+func _add_capsule(parent: Node3D, radius_value: float, height: float, position: Vector3, material: Material) -> MeshInstance3D:
+	var mesh_instance := MeshInstance3D.new()
+	var mesh := CapsuleMesh.new()
+	mesh.radius = radius_value
+	mesh.height = height
+	mesh.radial_segments = 12
+	mesh.rings = 4
 	mesh_instance.mesh = mesh
 	mesh_instance.position = position
 	mesh_instance.material_override = material

@@ -22,6 +22,12 @@ enum Slot { MELEE, PRIMARY, SECONDARY, GRENADE }
 @export var recoil_pitch := 0.018
 @export var recoil_yaw := 0.008
 @export var category := "rifle"
+@export var view_model_path := ""
+@export var world_model_path := ""
+@export var animation_profile := "rifle"
+@export var surface_profile := "metal"
+@export var muzzle_offset := Vector3(0, 0, -0.78)
+@export var view_scale := Vector3.ONE
 
 static func create(data: Dictionary) -> LocalStrikeWeaponDefinition:
 	var weapon := LocalStrikeWeaponDefinition.new()

@@ -6,6 +6,7 @@
 *.log
 *.tmp
 captures/
+.testdata/
 builds/
 exports/
 
