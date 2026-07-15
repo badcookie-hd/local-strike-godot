@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.webp binary
+*.ogg binary
+*.wav binary
+*.glb binary
+*.res binary

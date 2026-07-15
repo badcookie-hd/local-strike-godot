@@ -1,0 +1,23 @@
+# Godot-generated data
+.godot/
+.import/
+
+# Local editor/runtime state
+*.log
+*.tmp
+captures/
+builds/
+exports/
+
+# Portable Godot is convenient locally, but its main executable exceeds
+# GitHub's 100 MB per-file limit. Keep only its documentation/license files.
+engine/*.exe
+engine/editor_data/
+engine/_sc_
+engine/cache/
+
+# Self-contained editor profile folders
+export_templates/
+feature_profiles/
+script_templates/
+text_editor_themes/
