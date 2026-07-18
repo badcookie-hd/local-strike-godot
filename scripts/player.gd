@@ -2,6 +2,7 @@ class_name LocalStrikePlayer
 extends CharacterBody3D
 
 signal shot_fired(origin: Vector3, end: Vector3, hit: bool, normal: Vector3, surface_type: String, actor_hit: bool)
+signal shot_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, fire_mode: String)
 signal stats_changed
 signal hit_confirmed(killed: bool)
 signal player_died
@@ -10,6 +11,8 @@ signal damage_taken(amount: float)
 signal footstep(position: Vector3)
 
 const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
+const Ballistics = preload("res://scripts/ballistics_manager.gd")
+const SurfaceProfile = preload("res://scripts/surface_profile.gd")
 
 const GRAVITY := 22.0
 const JUMP_VELOCITY := 7.6
@@ -33,6 +36,8 @@ var enabled := true
 var authoritative_damage := true
 var helmet := true
 var crouching := false
+var aiming := false
+var fire_mode := "auto"
 
 var _yaw := 0.0
 var _pitch := 0.0
@@ -60,6 +65,9 @@ var _weapon_sway := Vector2.ZERO
 var _footstep_timer := 0.0
 var _collision: CollisionShape3D
 var _capsule: CapsuleShape3D
+var _shot_sequence := 0
+var _floor_surface := "concrete"
+var _equip_timer := 0.0
 
 func _ready() -> void:
 	collision_layer = 1
@@ -213,6 +221,7 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_fire_cooldown = maxf(0.0, _fire_cooldown - delta)
+	_equip_timer = maxf(0.0, _equip_timer - delta)
 	_muzzle_flash_timer = maxf(0.0, _muzzle_flash_timer - delta)
 	if _muzzle_flash_timer <= 0.0:
 		_muzzle_flash.visible = false
@@ -225,6 +234,8 @@ func _physics_process(delta: float) -> void:
 
 	if Input.is_action_just_pressed("reload"):
 		begin_reload()
+	if Input.is_action_just_pressed("fire_mode"):
+		cycle_fire_mode()
 	if Input.is_action_just_pressed("select_primary") and not primary_key.is_empty():
 		equip_weapon(primary_key)
 	elif Input.is_action_just_pressed("select_secondary"):
@@ -234,7 +245,9 @@ func _physics_process(delta: float) -> void:
 	elif Input.is_action_just_pressed("select_grenade") and not grenade_key.is_empty():
 		equip_weapon(grenade_key)
 	var current_spec := WeaponCatalog.get_weapon(weapon_key)
-	if (current_spec.automatic and Input.is_action_pressed("fire")) or (not current_spec.automatic and Input.is_action_just_pressed("fire")):
+	aiming = Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
+	var automatic_fire := fire_mode == "auto" or fire_mode == "pump"
+	if (automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire")):
 		shoot()
 	if Input.is_action_just_pressed("jump"):
 		_jump_buffer_timer = JUMP_BUFFER_TIME
@@ -243,18 +256,26 @@ func _physics_process(delta: float) -> void:
 
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var direction := (transform.basis * Vector3(input.x, 0, input.y)).normalized()
-	crouching = Input.is_action_pressed("crouch") and is_on_floor()
+	var wants_crouch := Input.is_action_pressed("crouch") and is_on_floor()
+	if wants_crouch:
+		crouching = true
+	elif crouching and _can_stand():
+		crouching = false
 	_capsule.height = 1.08 if crouching else 1.55
 	_collision.position.y = 0.58 if crouching else 0.82
 	var sprinting := Input.is_action_pressed("sprint") and not crouching and stamina > 2.0 and input.length() > 0.1
-	var speed := 2.8 if crouching else (7.0 if sprinting else 4.5)
+	var speed := (2.8 if crouching else (7.0 if sprinting else 4.5)) / maxf(1.0, current_spec.weight * 0.92)
 	if sprinting:
 		stamina = maxf(0.0, stamina - 30.0 * delta)
 	else:
 		stamina = minf(100.0, stamina + 24.0 * delta)
 
-	velocity.x = move_toward(velocity.x, direction.x * speed, 24.0 * delta)
-	velocity.z = move_toward(velocity.z, direction.z * speed, 24.0 * delta)
+	var surface: Dictionary = SurfaceProfile.get_profile(_floor_surface)
+	var acceleration: float = 24.0 * float(surface.friction) if is_on_floor() else 7.5
+	var target_x := direction.x * speed
+	var target_z := direction.z * speed
+	velocity.x = move_toward(velocity.x, target_x, acceleration * delta)
+	velocity.z = move_toward(velocity.z, target_z, acceleration * delta)
 	var was_on_floor := is_on_floor()
 	if was_on_floor:
 		_coyote_timer = COYOTE_TIME
@@ -262,13 +283,19 @@ func _physics_process(delta: float) -> void:
 		_coyote_timer = maxf(0.0, _coyote_timer - delta)
 		velocity.y -= GRAVITY * delta
 	if _jump_buffer_timer > 0.0 and _coyote_timer > 0.0:
-		velocity.y = JUMP_VELOCITY
+		if direction.length_squared() > 0.1 and _try_vault(direction):
+			velocity.y = 2.4
+		else:
+			velocity.y = JUMP_VELOCITY
 		_jump_buffer_timer = 0.0
 		_coyote_timer = 0.0
 	var fall_speed := velocity.y
 	move_and_slide()
+	_update_floor_surface()
 	if is_on_floor() and not was_on_floor and fall_speed < -3.0:
 		_landing_kick = minf(0.12, absf(fall_speed) * 0.009)
+		if fall_speed < -10.0:
+			apply_damage(minf(60.0, (absf(fall_speed) - 9.0) * 4.0), "limb")
 
 	if input.length() > 0.1 and is_on_floor():
 		_move_time += delta * (11.5 if sprinting else 8.5)
@@ -280,22 +307,24 @@ func _physics_process(delta: float) -> void:
 	_landing_kick = move_toward(_landing_kick, 0.0, 0.75 * delta)
 	var target_camera_height := 1.12 if crouching else CAMERA_HEIGHT
 	_camera.position.y = lerpf(_camera.position.y, target_camera_height + bob * 0.65 - _landing_kick, 13.0 * delta)
-	_camera.fov = lerpf(_camera.fov, 78.0 if sprinting else 74.0, 7.0 * delta)
+	var target_fov := current_spec.ads_fov if aiming else (78.0 if sprinting else 74.0)
+	_camera.fov = lerpf(_camera.fov, target_fov, 10.0 * delta)
 	_weapon_sway = _weapon_sway.lerp(Vector2.ZERO, minf(1.0, 10.0 * delta))
-	_weapon_root.position.x = lerpf(_weapon_root.position.x, 0.34 - _weapon_sway.x, 14.0 * delta)
-	_weapon_root.position.y = lerpf(_weapon_root.position.y, -0.28 + bob, 12.0 * delta)
+	_weapon_root.position.x = lerpf(_weapon_root.position.x, (0.0 if aiming else 0.34) - _weapon_sway.x, 14.0 * delta)
+	_weapon_root.position.y = lerpf(_weapon_root.position.y, (-0.19 if aiming else -0.28) + bob, 12.0 * delta)
 	_weapon_root.position.z = lerpf(_weapon_root.position.z, -0.72 + absf(_weapon_sway.y) * 0.5, 14.0 * delta)
 	_weapon_root.rotation.z = lerpf(_weapon_root.rotation.z, -input.x * 0.035, 10.0 * delta)
 	stats_changed.emit()
 
 func shoot() -> void:
-	if _fire_cooldown > 0.0 or _reloading:
+	if _fire_cooldown > 0.0 or _reloading or _equip_timer > 0.0:
 		return
 	if ammo <= 0:
 		begin_reload()
 		return
 
 	var spec := WeaponCatalog.get_weapon(weapon_key)
+	_shot_sequence += 1
 	ammo -= 1
 	_fire_cooldown = spec.fire_delay
 	ammo_state[weapon_key] = {"ammo": ammo, "reserve": reserve_ammo}
@@ -320,53 +349,113 @@ func shoot() -> void:
 		movement_penalty += spec.move_spread * 1.8
 	elif crouching:
 		movement_penalty *= 0.45
-	var total_spread := spec.spread + movement_penalty
-	for pellet in range(spec.pellets):
-		var spread := Vector3(
-			randf_range(-total_spread, total_spread),
-			randf_range(-total_spread, total_spread),
-			randf_range(-total_spread * 0.2, total_spread * 0.2)
-		)
-		var direction: Vector3 = (forward + _camera.global_transform.basis.x * spread.x + _camera.global_transform.basis.y * spread.y).normalized()
-		var end: Vector3 = origin + direction * float(spec.range)
-		var query := PhysicsRayQueryParameters3D.create(origin, end)
-		query.exclude = [get_rid()]
-		query.collision_mask = 5
-		query.collide_with_areas = true
-		var result := get_world_3d().direct_space_state.intersect_ray(query)
-		var hit := not result.is_empty()
-		var hit_position: Vector3 = result.position if hit else end
-		var hit_normal: Vector3 = result.normal if hit else -direction
-		var surface_type := "air"
-		var actor_hit := false
-		if hit:
-			var collider: Object = result.collider
-			var damage_target: Object = collider.get_parent() if collider is Area3D else collider
-			actor_hit = damage_target is Node and damage_target.is_in_group("damageable_actor")
-			if actor_hit:
-				surface_type = "flesh"
-			elif collider != null:
-				surface_type = str(collider.get_meta("surface_type", "concrete"))
-				if surface_type == "concrete" and damage_target != null:
-					surface_type = str(damage_target.get_meta("surface_type", "concrete"))
-			if authoritative_damage and damage_target != null and damage_target.has_method("take_damage"):
-				var hit_zone := str(collider.get_meta("hit_zone", "torso")) if collider != null else "torso"
-				var damage := spec.damage
-				if hit_zone == "head":
-					damage *= spec.head_multiplier
-				elif hit_zone == "limb":
-					damage *= spec.limb_multiplier
-				var killed: bool = damage_target.take_damage(damage, hit_zone)
-				hit_confirmed.emit(killed)
-		shot_fired.emit(origin, hit_position, hit, hit_normal, surface_type, actor_hit)
-	_pitch = clampf(_pitch - spec.recoil_pitch, -1.35, 1.35)
-	_yaw += randf_range(-spec.recoil_yaw, spec.recoil_yaw)
+	if aiming:
+		movement_penalty *= spec.ads_spread_multiplier
+	var total_spread := spec.spread * (spec.ads_spread_multiplier if aiming else 1.0) + movement_penalty
+	shot_requested.emit(_shot_sequence, origin, forward, weapon_key, fire_mode)
+	if authoritative_damage:
+		for pellet in range(spec.pellets):
+			var spread := Ballistics.deterministic_spread(spec, _shot_sequence, pellet, total_spread)
+			var direction: Vector3 = (forward + _camera.global_transform.basis.x * spread.x + _camera.global_transform.basis.y * spread.y).normalized()
+			var result := Ballistics.resolve_shot(get_world_3d().direct_space_state, origin, direction, spec, [get_rid()], _shot_sequence)
+			for hit_data in result.hits:
+				var target: Object = hit_data.target
+				if target != null and target.has_method("take_ballistic_damage"):
+					var killed: bool = target.take_ballistic_damage(float(hit_data.damage), str(hit_data.zone), spec.armor_penetration)
+					hit_confirmed.emit(killed)
+				elif target != null and target.has_method("take_damage"):
+					var killed: bool = target.take_damage(float(hit_data.damage), str(hit_data.zone))
+					hit_confirmed.emit(killed)
+				if target != null and target.has_method("apply_gameplay_impulse"):
+					target.apply_gameplay_impulse(direction * spec.shot_impulse, hit_data.position - target.global_position)
+			for segment in result.segments:
+				var segment_surface := str(segment.get("surface", "air"))
+				var segment_hit := segment_surface != "air"
+				shot_fired.emit(segment.from, segment.to, segment_hit, segment.get("normal", -direction), segment_surface, segment_surface == "flesh")
+	var recoil := Ballistics.recoil_for(spec, _shot_sequence - 1) * (0.72 if aiming else 1.0)
+	_pitch = clampf(_pitch - recoil.y, -1.35, 1.35)
+	_yaw += recoil.x
 	rotation.y = _yaw
 	_camera.rotation.x = _pitch
 
 	stats_changed.emit()
 	if ammo <= 0:
 		begin_reload()
+
+func cycle_fire_mode() -> void:
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.fire_modes.size() < 2:
+		return
+	var index := spec.fire_modes.find(fire_mode)
+	fire_mode = spec.fire_modes[(index + 1) % spec.fire_modes.size()]
+	stats_changed.emit()
+
+func get_fire_mode() -> String:
+	return fire_mode.to_upper()
+
+func pickup_weapon(key: String, current_ammo: int, reserve: int) -> void:
+	grant_weapon(key)
+	ammo = current_ammo
+	reserve_ammo = reserve
+	ammo_state[key] = {"ammo": ammo, "reserve": reserve_ammo}
+	stats_changed.emit()
+
+func remove_current_weapon_for_drop() -> Dictionary:
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY]:
+		return {}
+	var dropped := {"key": weapon_key, "ammo": ammo, "reserve": reserve_ammo}
+	inventory.erase(weapon_key)
+	if spec.slot == LocalStrikeWeaponDefinition.Slot.PRIMARY:
+		primary_key = ""
+	else:
+		secondary_key = "sidearm"
+		if not inventory.has("sidearm"):
+			inventory["sidearm"] = true
+			ammo_state["sidearm"] = {"ammo": 12, "reserve": 36}
+	equip_weapon(primary_key if not primary_key.is_empty() else secondary_key, false)
+	return dropped
+
+func _can_stand() -> bool:
+	var shape := CapsuleShape3D.new()
+	shape.radius = _capsule.radius
+	shape.height = 1.55
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = Transform3D(global_transform.basis, global_position + Vector3.UP * 0.82)
+	query.exclude = [get_rid()]
+	query.collision_mask = 1
+	return get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
+
+func _try_vault(direction: Vector3) -> bool:
+	if not is_on_floor():
+		return false
+	var low_origin := global_position + Vector3.UP * 0.45
+	var high_origin := global_position + Vector3.UP * 1.35
+	var low_query := PhysicsRayQueryParameters3D.create(low_origin, low_origin + direction * 0.8)
+	var high_query := PhysicsRayQueryParameters3D.create(high_origin, high_origin + direction * 0.8)
+	low_query.exclude = [get_rid()]
+	high_query.exclude = [get_rid()]
+	low_query.collision_mask = 1
+	high_query.collision_mask = 1
+	if get_world_3d().direct_space_state.intersect_ray(low_query).is_empty():
+		return false
+	if not get_world_3d().direct_space_state.intersect_ray(high_query).is_empty():
+		return false
+	global_position += direction * 0.58 + Vector3.UP * 0.42
+	return true
+
+func _update_floor_surface() -> void:
+	if not is_on_floor():
+		return
+	for index in range(get_slide_collision_count()):
+		var collision := get_slide_collision(index)
+		if collision.get_normal().y < 0.45:
+			continue
+		var collider := collision.get_collider()
+		if collider != null:
+			_floor_surface = str(collider.get_meta("surface_type", "concrete"))
+			return
 
 func begin_reload() -> void:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
@@ -419,6 +508,8 @@ func grant_weapon(key: String) -> String:
 	if spec.slot == LocalStrikeWeaponDefinition.Slot.PRIMARY:
 		if not primary_key.is_empty(): inventory.erase(primary_key)
 		primary_key = key
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
+		secondary_key = key
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE:
 		grenade_key = key
 	equip_weapon(key, false)
@@ -432,6 +523,15 @@ func apply_damage(amount: float, hit_zone := "torso") -> void:
 	armor -= absorbed
 	health = maxf(0.0, health - (amount - absorbed))
 	damage_taken.emit(amount - absorbed)
+	stats_changed.emit()
+	if health <= 0.0:
+		player_died.emit()
+
+func apply_confirmed_damage(amount: float) -> void:
+	if health <= 0.0:
+		return
+	health = maxf(0.0, health - amount)
+	damage_taken.emit(amount)
 	stats_changed.emit()
 	if health <= 0.0:
 		player_died.emit()
@@ -475,6 +575,8 @@ func equip_weapon(key: String, store_current := true) -> void:
 		ammo_state[weapon_key] = {"ammo": ammo, "reserve": reserve_ammo}
 	weapon_key = key
 	var spec := WeaponCatalog.get_weapon(key)
+	fire_mode = spec.fire_modes[0] if not spec.fire_modes.is_empty() else ("auto" if spec.automatic else "semi")
+	_equip_timer = spec.equip_time
 	var state: Dictionary = ammo_state.get(key, {"ammo": spec.magazine, "reserve": spec.reserve})
 	ammo = state.ammo
 	reserve_ammo = state.reserve
@@ -515,7 +617,7 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			_barrel.visible = false
 			_sight.visible = false
 			_accent.visible = false
-		"pistol":
+		"pistol", "revolver":
 			body_mesh.size = Vector3(0.16, 0.14, 0.42)
 			barrel_mesh.height = 0.3
 			_weapon_body.position = Vector3.ZERO
@@ -523,7 +625,7 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			grip_mesh.size = Vector3(0.11, 0.29, 0.13)
 			_sight.visible = false
 			_accent.position = Vector3(0.09, 0.075, -0.08)
-		"shotgun":
+		"shotgun", "auto_shotgun":
 			body_mesh.size = Vector3(0.2, 0.18, 0.92)
 			barrel_mesh.height = 0.72
 			_barrel.position.z = -0.78
@@ -536,7 +638,7 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			sight_mesh.size = Vector3(0.11, 0.1, 0.34)
 			_sight.position = Vector3(0, 0.14, -0.18)
 			body_material.albedo_color = Color("28333c")
-		"frag", "smoke":
+		"frag", "smoke", "flash", "incendiary":
 			body_mesh.size = Vector3(0.24, 0.34, 0.24)
 			_weapon_body.position = Vector3(0, -0.03, -0.08)
 			_barrel.visible = false

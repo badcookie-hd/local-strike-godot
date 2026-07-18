@@ -7,6 +7,8 @@ signal eliminated(peer_id: int)
 var peer_id := 0
 var team := 0
 var health := 100.0
+var armor := 35.0
+var helmet := true
 var weapon_name := "SIDEARM"
 var target_position := Vector3.ZERO
 var target_rotation_y := 0.0
@@ -50,10 +52,17 @@ func apply_snapshot(position: Vector3, yaw: float, next_health: float, next_weap
 	weapon_name = next_weapon
 
 func take_damage(amount: float, hit_zone := "torso") -> bool:
+	return take_ballistic_damage(amount, hit_zone, 0.0)
+
+func take_ballistic_damage(amount: float, hit_zone: String, armor_penetration: float) -> bool:
 	if health <= 0.0:
 		return false
-	health = maxf(0.0, health - amount)
-	damaged.emit(peer_id, amount, hit_zone)
+	var base_armor_ratio := 0.0 if hit_zone == "limb" else (0.58 if hit_zone != "head" or helmet else 0.0)
+	var absorbed := minf(armor, amount * base_armor_ratio * (1.0 - clampf(armor_penetration, 0.0, 1.0)))
+	armor -= absorbed
+	var health_damage := amount - absorbed
+	health = maxf(0.0, health - health_damage)
+	damaged.emit(peer_id, health_damage, hit_zone)
 	if health <= 0.0:
 		eliminated.emit(peer_id)
 		return true

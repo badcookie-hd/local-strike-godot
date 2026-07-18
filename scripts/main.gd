@@ -11,6 +11,11 @@ const MapDefinition = preload("res://scripts/map_definition.gd")
 const InteractableScript = preload("res://scripts/interactable.gd")
 const EffectsManagerScript = preload("res://scripts/effects_manager.gd")
 const QualityManager = preload("res://scripts/quality_manager.gd")
+const Ballistics = preload("res://scripts/ballistics_manager.gd")
+const PhysicsPropScript = preload("res://scripts/physics_prop.gd")
+const DroppedWeaponScript = preload("res://scripts/dropped_weapon.gd")
+const FireZoneScript = preload("res://scripts/fire_zone.gd")
+const RagdollScript = preload("res://scripts/ragdoll.gd")
 const ConcreteDiffuse = preload("res://assets/textures/concrete_floor_worn_001_diff_1k.jpg")
 const ConcreteNormal = preload("res://assets/textures/concrete_floor_worn_001_normal_1k.jpg")
 const ConcreteArm = preload("res://assets/textures/concrete_floor_worn_001_arm_1k.jpg")
@@ -25,6 +30,8 @@ var level_index := 0
 var current_level: LocalStrikeMapDefinition
 var sites: Array[Dictionary] = []
 var interactables: Dictionary = {}
+var physics_props: Dictionary = {}
+var dropped_weapons: Dictionary = {}
 var enemies: Array[LocalStrikeEnemy] = []
 var allies: Array[LocalStrikeEnemy] = []
 var remote_avatars: Dictionary = {}
@@ -68,6 +75,9 @@ var network_sync_timer := 0.0
 var current_quality := 0
 var player_team := 0
 var match_over := false
+var peer_shot_state: Dictionary = {}
+var prop_sync_timer := 0.0
+var next_drop_id := 1
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -90,6 +100,7 @@ func _ready() -> void:
 	player.name = "Player"
 	player.enabled = false
 	player.shot_fired.connect(_on_shot_fired)
+	player.shot_requested.connect(_on_player_shot_requested)
 	player.hit_confirmed.connect(_on_hit_confirmed)
 	player.player_died.connect(_on_player_died)
 	player.grenade_thrown.connect(_on_grenade_thrown)
@@ -134,6 +145,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("interact"):
 		_try_interact()
+	if event.is_action_pressed("drop_weapon"):
+		_handle_weapon_pickup_or_drop()
 	if event.is_action_pressed("toggle_buy"):
 		show_buy = not show_buy
 	if phase == Phase.BUY and event.is_action_pressed("map_next"):
@@ -299,6 +312,8 @@ func _load_level(index: int) -> void:
 	remote_avatars.clear()
 	sites.clear()
 	interactables.clear()
+	physics_props.clear()
+	dropped_weapons.clear()
 	material_cache.clear()
 
 	current_level = levels[index]
@@ -313,6 +328,7 @@ func _load_level(index: int) -> void:
 	_create_map_beacons(current_level.palette)
 	_create_map_identity_props()
 	_create_interactables()
+	_create_physics_props()
 	_create_reflection_probes()
 	player.reset_for_round(current_level.player_spawn)
 
@@ -463,6 +479,11 @@ func _buy_weapon(key: String) -> void:
 
 func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String) -> void:
 	var was_opponent := enemies.has(enemy)
+	var impulse := (position - player.global_position).normalized() * 6.0 + Vector3.UP * 2.0
+	var ragdoll = RagdollScript.new()
+	effect_root.add_child(ragdoll)
+	ragdoll.global_position = position
+	ragdoll.configure(Color("8f3f43") if enemy.team == 1 else Color("365f70"), impulse)
 	enemies.erase(enemy)
 	allies.erase(enemy)
 	if was_opponent:
@@ -506,14 +527,17 @@ func _on_shot_fired(origin: Vector3, end: Vector3, hit: bool, normal: Vector3, s
 	AudioManager.play_shot(origin, WeaponCatalog.get_weapon(player.weapon_key).category)
 	for bot in enemies:
 		if is_instance_valid(bot): bot.hear_noise(origin, 1.0)
-	if _is_network_client():
-		_request_network_shot.rpc_id(1, origin, end, player.weapon_key)
-		return
 	_create_tracer(origin, end, Color("ffd08a"))
 	if hit:
 		effects.spawn_impact(end, normal, surface_type, actor_hit)
 		if not actor_hit:
 			AudioManager.play_impact(end, surface_type)
+	if NetworkManager.peer != null and multiplayer.is_server():
+		_network_shot_effect.rpc(origin, end, normal, surface_type, actor_hit)
+
+func _on_player_shot_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, mode: String) -> void:
+	if _is_network_client():
+		_request_network_shot.rpc_id(1, sequence, origin, direction, weapon_key, mode)
 
 func _on_enemy_shot(origin: Vector3, end: Vector3, hit: bool) -> void:
 	AudioManager.play_shot(origin, "rifle")
@@ -608,27 +632,38 @@ func _on_grenade_detonated(position: Vector3, grenade_kind: String, damage: floa
 		smoke.global_position = position
 		_create_burst(position + Vector3.UP * 0.4, Color("a9d8ff"), 10)
 		return
+	if grenade_kind == "flash":
+		_create_burst(position + Vector3.UP * 0.4, Color.WHITE, 28)
+		AudioManager.play_explosion(position)
+		_apply_flash(position, radius)
+		return
+	if grenade_kind == "incendiary":
+		_create_burst(position + Vector3.UP * 0.4, Color("ff6a2e"), 24)
+		AudioManager.play_explosion(position)
+		var fire_zone = FireZoneScript.new()
+		fire_zone.damage_tick.connect(_on_fire_zone_tick)
+		effect_root.add_child(fire_zone)
+		fire_zone.global_position = position
+		return
 	_create_burst(position + Vector3.UP * 0.5, Color("ff9a3d"), 34)
 	AudioManager.play_explosion(position)
-	var sphere := SphereShape3D.new()
-	sphere.radius = radius
-	var query := PhysicsShapeQueryParameters3D.new()
-	query.shape = sphere
-	query.transform = Transform3D(Basis.IDENTITY, position)
-	query.collision_mask = 3
-	var damaged_targets: Dictionary = {}
-	for result in get_world_3d().direct_space_state.intersect_shape(query, 32):
-		var target: Object = result.collider
-		if target == null or damaged_targets.has(target.get_instance_id()):
-			continue
-		damaged_targets[target.get_instance_id()] = true
-		if target.has_method("apply_damage") or target.has_method("take_damage"):
-			var distance := position.distance_to(target.global_position)
-			var applied_damage := damage * clampf(1.0 - distance / radius, 0.15, 1.0)
-			if target.has_method("apply_damage"):
-				target.apply_damage(applied_damage, "torso")
-			else:
-				target.take_damage(applied_damage, "torso")
+	if not _is_network_client():
+		_apply_radial_damage(position, damage, radius)
+
+func _apply_flash(position: Vector3, radius: float) -> void:
+	var eye := player.global_position + Vector3.UP * 1.55
+	var to_flash := position - eye
+	if to_flash.length() > radius or not _has_explosion_line_of_sight(position, eye, null):
+		return
+	var view_forward := -player.global_transform.basis.z
+	var facing := clampf((view_forward.dot(to_flash.normalized()) + 1.0) * 0.5, 0.0, 1.0)
+	var distance_scale := 1.0 - to_flash.length() / radius
+	hud.show_flash(clampf(distance_scale * (0.35 + facing * 0.9), 0.0, 1.0))
+
+func _on_fire_zone_tick(position: Vector3, radius: float, damage: float) -> void:
+	if _is_network_client():
+		return
+	_apply_radial_damage(position, damage, radius)
 
 func _is_network_client() -> bool:
 	return NetworkManager.peer != null and not multiplayer.is_server()
@@ -665,6 +700,7 @@ func _register_client(player_name: String) -> void:
 	GameSession.register_player(sender, player_name, 0)
 	_receive_match_config.rpc_id(sender, game_mode, level_index, bot_difficulty)
 	_receive_interactable_snapshot.rpc_id(sender, _serialize_interactables())
+	_receive_physics_snapshot.rpc_id(sender, _serialize_physics_state())
 	_sync_roster.rpc(GameSession.roster)
 	_spawn_teams()
 
@@ -699,6 +735,83 @@ func _try_interact() -> void:
 		_request_interaction.rpc_id(1, nearest.interactable_id)
 	elif nearest.interact():
 		hud.show_toast("Door opened" if nearest.opened else "Door closed", 1.2)
+
+func _handle_weapon_pickup_or_drop() -> void:
+	if _is_network_client():
+		_request_weapon_pickup_drop.rpc_id(1, player.weapon_key, player.ammo, player.reserve_ammo)
+		return
+	_handle_authoritative_weapon_action(player.global_position, player.weapon_key, player.ammo, player.reserve_ammo, 1)
+
+func _handle_authoritative_weapon_action(actor_position: Vector3, weapon_key: String, current_ammo: int, reserve: int, peer_id: int) -> void:
+	var nearest: RigidBody3D
+	var nearest_distance := 2.0
+	for candidate in dropped_weapons.values():
+		if not is_instance_valid(candidate):
+			continue
+		var distance := actor_position.distance_to(candidate.global_position)
+		if distance < nearest_distance:
+			nearest = candidate
+			nearest_distance = distance
+	if nearest != null:
+		if peer_id == 1:
+			player.pickup_weapon(nearest.weapon_key, nearest.ammo, nearest.reserve)
+			hud.show_toast("Picked up %s" % player.get_weapon_name(), 1.4)
+		else:
+			_confirm_network_pickup.rpc_id(peer_id, nearest.weapon_key, nearest.ammo, nearest.reserve)
+		dropped_weapons.erase(nearest.drop_id)
+		if NetworkManager.peer != null:
+			_remove_network_drop.rpc(nearest.drop_id)
+		nearest.queue_free()
+		return
+	var data := player.remove_current_weapon_for_drop() if peer_id == 1 else {"key": weapon_key, "ammo": current_ammo, "reserve": reserve}
+	if data.is_empty():
+		if peer_id == 1:
+			hud.show_toast("No firearm to drop", 1.2)
+		return
+	var forward: Vector3 = -player.global_transform.basis.z if peer_id == 1 else -remote_avatars[peer_id].global_transform.basis.z
+	_spawn_dropped_weapon(data.key, int(data.ammo), int(data.reserve), actor_position + Vector3.UP * 1.0 + forward * 0.7, forward * 4.0 + Vector3.UP * 1.2)
+	if peer_id != 1:
+		_confirm_network_drop.rpc_id(peer_id, weapon_key)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_weapon_pickup_drop(weapon_key: String, current_ammo: int, reserve: int) -> void:
+	if not multiplayer.is_server() or not WeaponCatalog.all().has(weapon_key):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var avatar: Node3D = remote_avatars.get(sender)
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if not is_instance_valid(avatar) or spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY]:
+		return
+	if current_ammo < 0 or current_ammo > spec.magazine or reserve < 0 or reserve > spec.reserve:
+		return
+	_handle_authoritative_weapon_action(avatar.global_position, weapon_key, current_ammo, reserve, sender)
+
+@rpc("authority", "call_remote", "reliable")
+func _confirm_network_pickup(weapon_key: String, current_ammo: int, reserve: int) -> void:
+	player.pickup_weapon(weapon_key, current_ammo, reserve)
+	hud.show_toast("Picked up %s" % player.get_weapon_name(), 1.4)
+
+@rpc("authority", "call_remote", "reliable")
+func _confirm_network_drop(weapon_key: String) -> void:
+	if player.weapon_key == weapon_key:
+		player.remove_current_weapon_for_drop()
+
+@rpc("authority", "call_remote", "reliable")
+func _remove_network_drop(drop_id: String) -> void:
+	if dropped_weapons.has(drop_id) and is_instance_valid(dropped_weapons[drop_id]):
+		dropped_weapons[drop_id].queue_free()
+		dropped_weapons.erase(drop_id)
+
+func _spawn_dropped_weapon(key: String, current_ammo: int, reserve: int, position: Vector3, impulse: Vector3, forced_id := ""):
+	var drop_id := forced_id if not forced_id.is_empty() else "drop_%d" % next_drop_id
+	next_drop_id += 1
+	var drop = DroppedWeaponScript.new()
+	drop.configure(drop_id, key, current_ammo, reserve)
+	level_root.add_child(drop)
+	drop.global_position = position
+	drop.linear_velocity = impulse
+	dropped_weapons[drop_id] = drop
+	return drop
 
 @rpc("any_peer", "call_remote", "reliable")
 func _request_interaction(interactable_id: String) -> void:
@@ -758,13 +871,25 @@ func _apply_radial_damage(position: Vector3, damage: float, radius: float, exclu
 		if target == null or target == excluded or damaged_targets.has(target.get_instance_id()):
 			continue
 		damaged_targets[target.get_instance_id()] = true
+		var target_position: Vector3 = target.global_position
+		if not _has_explosion_line_of_sight(position, target_position + Vector3.UP * 0.4, target):
+			continue
+		var falloff := clampf(1.0 - position.distance_to(target_position) / radius, 0.15, 1.0)
 		if target.has_method("apply_damage") or target.has_method("take_damage"):
-			var target_position: Vector3 = target.global_position
-			var applied_damage := damage * clampf(1.0 - position.distance_to(target_position) / radius, 0.15, 1.0)
+			var applied_damage := damage * falloff
 			if target.has_method("apply_damage"):
 				target.apply_damage(applied_damage, "torso")
 			else:
 				target.take_damage(applied_damage, "torso")
+		if target.has_method("apply_gameplay_impulse"):
+			var direction := (target_position - position).normalized()
+			target.apply_gameplay_impulse((direction + Vector3.UP * 0.25) * 18.0 * falloff, Vector3.ZERO)
+
+func _has_explosion_line_of_sight(origin: Vector3, target: Vector3, target_object: Object) -> bool:
+	var query := PhysicsRayQueryParameters3D.create(origin + Vector3.UP * 0.12, target)
+	query.collision_mask = 7
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	return hit.is_empty() or hit.get("collider") == target_object
 
 func _update_network_state(delta: float) -> void:
 	if NetworkManager.peer == null:
@@ -775,6 +900,10 @@ func _update_network_state(delta: float) -> void:
 	network_sync_timer = 0.05
 	if multiplayer.is_server():
 		_receive_player_snapshot.rpc(1, player.global_position, player.rotation.y, player.health, player.get_weapon_name())
+		prop_sync_timer -= delta
+		if prop_sync_timer <= 0.0:
+			prop_sync_timer = 0.1
+			_sync_physics_state.rpc(_serialize_physics_state())
 	else:
 		_submit_player_snapshot.rpc_id(1, player.global_position, player.rotation.y, player.get_weapon_name())
 
@@ -795,6 +924,41 @@ func _receive_player_snapshot(peer_id: int, position: Vector3, yaw: float, healt
 	var avatar := _get_or_create_avatar(peer_id, team)
 	avatar.apply_snapshot(position, yaw, health, weapon)
 
+func _serialize_physics_state() -> Dictionary:
+	var props := {}
+	for prop_id in physics_props:
+		var prop = physics_props[prop_id]
+		if is_instance_valid(prop):
+			props[prop_id] = prop.serialize_state()
+	var drops := {}
+	for drop_id in dropped_weapons:
+		var weapon = dropped_weapons[drop_id]
+		if is_instance_valid(weapon):
+			drops[drop_id] = weapon.serialize_state()
+	return {"props": props, "drops": drops}
+
+@rpc("authority", "call_remote", "unreliable", 3)
+func _sync_physics_state(snapshot: Dictionary) -> void:
+	_apply_physics_snapshot(snapshot)
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_physics_snapshot(snapshot: Dictionary) -> void:
+	_apply_physics_snapshot(snapshot)
+
+func _apply_physics_snapshot(snapshot: Dictionary) -> void:
+	for prop_id in snapshot.get("props", {}):
+		if physics_props.has(prop_id) and is_instance_valid(physics_props[prop_id]):
+			physics_props[prop_id].apply_state(snapshot.props[prop_id])
+	for drop_id in snapshot.get("drops", {}):
+		var state: Dictionary = snapshot.drops[drop_id]
+		if not dropped_weapons.has(drop_id):
+			_spawn_dropped_weapon(state.weapon, int(state.ammo), int(state.reserve), state.transform.origin, Vector3.ZERO, str(drop_id))
+		if dropped_weapons.has(drop_id) and is_instance_valid(dropped_weapons[drop_id]):
+			var drop = dropped_weapons[drop_id]
+			drop.transform = state.transform
+			drop.linear_velocity = state.linear_velocity
+			drop.angular_velocity = state.angular_velocity
+
 func _get_or_create_avatar(peer_id: int, team: int) -> LocalStrikeNetworkAvatar:
 	if remote_avatars.has(peer_id) and is_instance_valid(remote_avatars[peer_id]):
 		return remote_avatars[peer_id]
@@ -813,34 +977,70 @@ func _on_network_avatar_damaged(peer_id: int, amount: float, hit_zone: String) -
 
 @rpc("authority", "call_remote", "reliable")
 func _receive_network_damage(amount: float, hit_zone: String) -> void:
-	player.apply_damage(amount, hit_zone)
+	player.apply_confirmed_damage(amount)
 
 @rpc("any_peer", "call_remote", "reliable")
-func _request_network_shot(origin: Vector3, requested_end: Vector3, weapon_key: String) -> void:
+func _request_network_shot(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, mode: String) -> void:
 	if not multiplayer.is_server():
 		return
+	var sender := multiplayer.get_remote_sender_id()
+	var avatar: LocalStrikeNetworkAvatar = remote_avatars.get(sender)
+	if not is_instance_valid(avatar) or avatar.global_position.distance_to(origin) > 2.6:
+		return
 	var spec := WeaponCatalog.get_weapon(weapon_key)
-	var direction := (requested_end - origin).normalized()
-	var end := origin + direction * minf(spec.range, origin.distance_to(requested_end))
-	var query := PhysicsRayQueryParameters3D.create(origin, end)
-	query.collision_mask = 5
-	query.collide_with_areas = true
-	var result := get_world_3d().direct_space_state.intersect_ray(query)
-	var hit_position: Vector3 = result.position if not result.is_empty() else end
-	var hit_normal: Vector3 = result.normal if not result.is_empty() else -direction
-	var surface_type := "air"
-	var actor_hit := false
-	if not result.is_empty():
-		var collider: Object = result.collider
-		var target: Object = collider.get_parent() if collider is Area3D else collider
-		actor_hit = target is Node and target.is_in_group("damageable_actor")
-		surface_type = "flesh" if actor_hit else str(collider.get_meta("surface_type", target.get_meta("surface_type", "concrete") if target != null else "concrete"))
-		if target != null and target.has_method("take_damage"):
-			var zone := str(collider.get_meta("hit_zone", "torso"))
-			var applied_damage := spec.damage * (spec.head_multiplier if zone == "head" else (spec.limb_multiplier if zone == "limb" else 1.0))
-			target.take_damage(applied_damage, zone)
-	_network_shot_effect.rpc(origin, hit_position, hit_normal, surface_type, actor_hit)
-	_network_shot_effect(origin, hit_position, hit_normal, surface_type, actor_hit)
+	if mode not in spec.fire_modes:
+		return
+	var horizontal_direction := Vector3(direction.x, 0.0, direction.z).normalized()
+	if horizontal_direction.length_squared() < 0.5 or horizontal_direction.dot(-avatar.global_transform.basis.z) < 0.45:
+		return
+	var now: float = Time.get_ticks_msec() / 1000.0
+	var previous: Dictionary = peer_shot_state.get(sender, {"sequence": 0, "time": -10.0, "weapon": weapon_key, "ammo": spec.magazine})
+	if str(previous.weapon) != weapon_key:
+		previous = {"sequence": int(previous.sequence), "time": float(previous.time), "weapon": weapon_key, "ammo": spec.magazine}
+	if int(previous.ammo) <= 0:
+		if now - float(previous.time) < spec.reload_time:
+			return
+		previous.ammo = spec.magazine
+	if sequence <= int(previous.sequence) or now - float(previous.time) < spec.fire_delay * 0.82:
+		return
+	peer_shot_state[sender] = {"sequence": sequence, "time": now, "weapon": weapon_key, "ammo": int(previous.ammo) - 1}
+	var combined := {"sequence": sequence, "segments": [], "hits": [], "penetrations": 0, "ricochets": 0}
+	var forward := direction.normalized()
+	var right := forward.cross(Vector3.UP).normalized()
+	if right.length_squared() < 0.1:
+		right = Vector3.RIGHT
+	var up := right.cross(forward).normalized()
+	for pellet in range(spec.pellets):
+		var spread := Ballistics.deterministic_spread(spec, sequence, pellet, spec.spread)
+		var pellet_direction := (forward + right * spread.x + up * spread.y).normalized()
+		var result := Ballistics.resolve_shot(get_world_3d().direct_space_state, origin, pellet_direction, spec, [avatar.get_rid()], sequence)
+		combined.segments.append_array(result.segments)
+		combined.hits.append_array(result.hits)
+		combined.penetrations = int(combined.penetrations) + int(result.penetrations)
+		combined.ricochets = int(combined.ricochets) + int(result.ricochets)
+		for hit_data in result.hits:
+			var target: Object = hit_data.target
+			if target != null and target.has_method("take_ballistic_damage"):
+				target.take_ballistic_damage(float(hit_data.damage), str(hit_data.zone), spec.armor_penetration)
+			elif target != null and target.has_method("take_damage"):
+				target.take_damage(float(hit_data.damage), str(hit_data.zone))
+			if target != null and target.has_method("apply_gameplay_impulse"):
+				target.apply_gameplay_impulse(pellet_direction * spec.shot_impulse, hit_data.position - target.global_position)
+	var clean := Ballistics.network_result(combined)
+	_confirm_shot.rpc(clean)
+	_confirm_shot(clean)
+
+@rpc("authority", "call_remote", "unreliable", 2)
+func _confirm_shot(result: Dictionary) -> void:
+	for segment in result.get("segments", []):
+		var surface := str(segment.get("surface", "air"))
+		var end: Vector3 = segment.to
+		_create_tracer(segment.from, end, Color("ffd08a"))
+		if surface != "air":
+			var actor_hit := surface == "flesh"
+			effects.spawn_impact(end, segment.get("normal", Vector3.UP), surface, actor_hit)
+			if not actor_hit:
+				AudioManager.play_impact(end, surface)
 
 @rpc("authority", "call_remote", "unreliable", 2)
 func _network_shot_effect(origin: Vector3, end: Vector3, normal: Vector3, surface_type: String, actor_hit: bool) -> void:
@@ -1105,6 +1305,54 @@ func _create_map_identity_props() -> void:
 			_create_display_panel(Vector3(14.8, 1.35, 3.2), -90.0, Color("9777ff"))
 			for position in [Vector3(-11.8, 0.65, -5.0), Vector3(-11.8, 0.65, 5.0), Vector3(11.8, 0.65, -5.0), Vector3(11.8, 0.65, 5.0)]:
 				_create_solar_panel(position)
+		3:
+			for position in [Vector3(-12, 0, -1), Vector3(-4, 0, 10), Vector3(8, 0, 4)]:
+				_create_market_stall(position)
+			_create_stone_arch(Vector3(-1.5, 0, 5.5), 0.0)
+			_create_stone_arch(Vector3(9.0, 0, -6.0), 90.0)
+			_create_floodlight(Vector3(-14, 0, -14), Vector3(-5, 0, -5), Color("ffc77d"))
+		4:
+			_create_ice_patch(Vector3(-5.5, 0.018, -3.0), Vector2(6.0, 4.0))
+			_create_ice_patch(Vector3(8.0, 0.018, 3.0), Vector2(5.0, 5.0))
+			_create_station_canopy(Vector3(0, 0, 13.0))
+			_create_floodlight(Vector3(-14, 0, 13), Vector3(-4, 0, 4), Color("b8ecff"))
+			_create_floodlight(Vector3(14, 0, -13), Vector3(4, 0, -4), Color("d9f4ff"))
+
+func _create_market_stall(position: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = position
+	level_root.add_child(root)
+	for x in [-0.8, 0.8]:
+		_add_detail_box(root, Vector3(0.12, 2.2, 0.12), Vector3(x, 1.1, 0), Color("57402f"), 0.82, 0.0)
+	_add_detail_box(root, Vector3(1.9, 0.12, 1.2), Vector3(0, 2.15, 0), Color("a8493f"), 0.76, 0.0)
+	_add_detail_box(root, Vector3(1.7, 0.16, 0.75), Vector3(0, 0.92, 0), Color("765239"), 0.8, 0.0)
+
+func _create_stone_arch(position: Vector3, rotation_y: float) -> void:
+	var root := Node3D.new()
+	root.position = position
+	root.rotation_degrees.y = rotation_y
+	level_root.add_child(root)
+	for x in [-1.25, 1.25]:
+		_add_detail_box(root, Vector3(0.65, 3.4, 0.8), Vector3(x, 1.7, 0), Color("81776d"), 0.92, 0.0)
+	_add_detail_box(root, Vector3(3.1, 0.65, 0.8), Vector3(0, 3.25, 0), Color("81776d"), 0.92, 0.0)
+
+func _create_ice_patch(position: Vector3, size: Vector2) -> void:
+	var body := StaticBody3D.new()
+	body.position = position
+	body.collision_layer = 1
+	body.set_meta("surface_type", "ice")
+	level_root.add_child(body)
+	var mesh_instance := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(size.x, 0.025, size.y)
+	mesh_instance.mesh = mesh
+	mesh_instance.material_override = _plain_material(Color("91c9d9"), 0.08, 0.16)
+	body.add_child(mesh_instance)
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = mesh.size
+	collision.shape = shape
+	body.add_child(collision)
 
 func _create_puddle(position: Vector3, size: Vector2, color: Color) -> void:
 	var puddle := MeshInstance3D.new()
@@ -1138,7 +1386,7 @@ func _create_station_canopy(position: Vector3) -> void:
 	root.position = position
 	level_root.add_child(root)
 	_add_detail_box(root, Vector3(18.0, 0.18, 2.4), Vector3(0, 3.0, 0), Color("3c454b"), 0.58, 0.52)
-	for x in [-8.0, -4.0, 0.0, 4.0, 8.0]:
+	for x in [-8.0, -4.0, 4.0, 8.0]:
 		_add_detail_box(root, Vector3(0.16, 3.0, 0.16), Vector3(x, 1.5, 0), Color("252c31"), 0.42, 0.68)
 
 func _create_signal(position: Vector3, color: Color) -> void:
@@ -1187,6 +1435,24 @@ func _create_interactables() -> void:
 		interactables[interactive.interactable_id] = interactive
 		if interactive.kind == LocalStrikeInteractable.Kind.DOOR:
 			_create_door_frame(interactive.position, float(data.get("rotation_y", 0.0)), interactive.size, data.get("color", Color("52616b")))
+
+func _create_physics_props() -> void:
+	for data in current_level.physics_props:
+		var prop = PhysicsPropScript.new()
+		prop.configure(data)
+		prop.position = data.get("position", Vector3.ZERO)
+		prop.rotation_degrees.y = float(data.get("rotation_y", 0.0))
+		prop.state_changed.connect(_on_physics_prop_state_changed)
+		prop.destroyed.connect(_on_physics_prop_destroyed)
+		level_root.add_child(prop)
+		physics_props[prop.prop_id] = prop
+
+func _on_physics_prop_state_changed(_prop_id: String, _state: Dictionary) -> void:
+	pass
+
+func _on_physics_prop_destroyed(_prop: Object, position: Vector3, surface_type: String) -> void:
+	_create_burst(position, Color("b79872") if surface_type == "wood" else Color("b9d6dc"), 18)
+	effects.spawn_impact(position, Vector3.UP, surface_type, false)
 
 func _create_door_frame(position: Vector3, rotation_y: float, size: Vector3, color: Color) -> void:
 	var frame := Node3D.new()
@@ -1455,6 +1721,8 @@ func _update_hud() -> void:
 		"armor": player.armor,
 		"weapon": weapon_spec.display_name,
 		"ammo": "RELOAD" if player.is_reloading() else "%d / %d" % [player.ammo, player.reserve_ammo],
+		"fire_mode": player.get_fire_mode(),
+		"aiming": player.aiming,
 		"charge": charge_text,
 		"stamina": player.stamina,
 		"buy_visible": show_buy and started and (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH),
@@ -1486,6 +1754,8 @@ func _ensure_input_actions() -> void:
 	_add_key_action("jump", KEY_SPACE)
 	_add_key_action("crouch", KEY_CTRL)
 	_add_key_action("reload", KEY_R)
+	_add_key_action("fire_mode", KEY_V)
+	_add_key_action("drop_weapon", KEY_G)
 	_add_key_action("interact", KEY_E)
 	_add_key_action("toggle_buy", KEY_B)
 	_add_key_action("map_next", KEY_M)
@@ -1506,6 +1776,11 @@ func _ensure_input_actions() -> void:
 		var mouse := InputEventMouseButton.new()
 		mouse.button_index = MOUSE_BUTTON_LEFT
 		InputMap.action_add_event("fire", mouse)
+	if not InputMap.has_action("aim"):
+		InputMap.add_action("aim")
+		var aim_mouse := InputEventMouseButton.new()
+		aim_mouse.button_index = MOUSE_BUTTON_RIGHT
+		InputMap.action_add_event("aim", aim_mouse)
 
 func _add_key_action(action: StringName, key: Key) -> void:
 	if not InputMap.has_action(action):
@@ -1532,6 +1807,7 @@ func _create_levels() -> Array[LocalStrikeMapDefinition]:
 			"props": [_prop(-13, -12, 4.2, 0.4, Color("f3b447")), _prop(12, 10.8, 3.5, 0.4, Color("56d8c5"))],
 			"environment_profile": "harbor_sunset",
 			"reflection_zones": [_reflection(Vector3(-8, 2.2, 4), Vector3(13, 5, 11)), _reflection(Vector3(9, 2.2, -5), Vector3(11, 5, 13))],
+			"physics_props": [_physics_prop("harbor_crate_1", Vector3(-4.2, 0.55, 8.0), Vector3(1.1, 1.1, 1.1), "wood"), _physics_prop("harbor_barrel_1", Vector3(10.8, 0.55, 4.5), Vector3(0.7, 1.1, 0.7), "metal", 28.0, 75.0)],
 			"interactables": [
 				_interactive("harbor_door", LocalStrikeInteractable.Kind.DOOR, Vector3(2.8, 1.25, -5.3), Vector3(1.75, 2.5, 0.2), Color("3e6372")),
 				_interactive("harbor_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-10.8, 1.15, 5.8), Vector3(2.8, 1.55, 0.07), Color("83c6d3"), 90.0),
@@ -1554,6 +1830,7 @@ func _create_levels() -> Array[LocalStrikeMapDefinition]:
 			"props": [_prop(-10.8, -2.2, 0.36, 23, Color("d88842")), _prop(10.8, 2.2, 0.36, 23, Color("d88842"))],
 			"environment_profile": "depot_overcast",
 			"reflection_zones": [_reflection(Vector3(-10, 2.1, 1), Vector3(8, 5, 18)), _reflection(Vector3(10, 2.1, -2), Vector3(8, 5, 18))],
+			"physics_props": [_physics_prop("depot_cart_1", Vector3(-7.0, 0.55, 4.0), Vector3(1.6, 1.0, 0.8), "metal", 42.0, 90.0), _physics_prop("depot_crate_1", Vector3(6.0, 0.55, -7.0), Vector3.ONE, "wood")],
 			"interactables": [
 				_interactive("depot_door", LocalStrikeInteractable.Kind.DOOR, Vector3(1.3, 1.25, 4.5), Vector3(1.65, 2.5, 0.2), Color("6b4d3d"), 90.0),
 				_interactive("depot_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-5.7, 1.2, 11.2), Vector3(2.6, 1.55, 0.07), Color("b1ced4")),
@@ -1576,11 +1853,58 @@ func _create_levels() -> Array[LocalStrikeMapDefinition]:
 			"props": [_prop(0, 0, 7, 0.35, Color("9777ff")), _prop(0, 0, 0.35, 7, Color("56d8c5"))],
 			"environment_profile": "solar_interior",
 			"reflection_zones": [_reflection(Vector3.ZERO + Vector3.UP * 2.0, Vector3(15, 6, 15)), _reflection(Vector3(10, 2.0, -9), Vector3(9, 5, 9))],
+			"physics_props": [_physics_prop("lab_cell_1", Vector3(-8.5, 0.65, 1.0), Vector3(0.8, 1.3, 0.8), "metal", 34.0, 80.0), _physics_prop("lab_glass_cart", Vector3(8.2, 0.5, -2.0), Vector3(1.2, 0.9, 0.7), "glass", 18.0, 35.0)],
 			"interactables": [
 				_interactive("lab_door", LocalStrikeInteractable.Kind.DOOR, Vector3(-4.2, 1.25, -3.5), Vector3(1.7, 2.5, 0.2), Color("465a77"), 90.0),
 				_interactive("lab_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(4.2, 1.2, 4.6), Vector3(3.2, 1.65, 0.07), Color("8fddea"), 90.0),
 				_interactive("lab_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(-9.0, 2.75, 8.0)),
 				_interactive("lab_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(12.8, 0.5, 3.8), Vector3(0.58, 0.95, 0.58), Color("a7445f"))
+			]
+		},
+		{
+			"name": "OLD QUARTER",
+			"player_spawn": Vector3(-13.0, 0.05, 13.0),
+			"palette": _palette(Color("172027"), Color("575552"), Color("81776d"), Color("75513d"), Color("ffc77d")),
+			"walls": _with_borders([
+				_w(-10.5, -6.0, 1.0, 12.0), _w(0, -9.0, 9.0, 1.0), _w(10.5, -3.5, 1.0, 13.0),
+				_w(-5.0, 5.5, 9.0, 1.0), _w(6.0, 8.0, 1.0, 10.0), _w(0, 0, 4.2, 4.2, "crate"),
+				_w(-12.5, 8.0, 2.8, 2.0, "crate"), _w(12.0, 10.5, 3.4, 1.6, "crate"), _w(5.0, -13.0, 2.4, 1.5, "crate")
+			]),
+			"sites": [_site("A", -12.0, -11.0, 3.0, Color("e9a84d")), _site("B", 11.5, 10.5, 3.0, Color("56d8c5"))],
+			"bot_spawns": [Vector3(13, 0.05, -13), Vector3(12, 0.05, -7), Vector3(8, 0.05, -13), Vector3(13, 0.05, 2), Vector3(5, 0.05, -8)],
+			"patrols": [Vector3(-12, 0, -11), Vector3(-5, 0, -2), Vector3(-10, 0, 10), Vector3.ZERO, Vector3(10, 0, 5), Vector3(12, 0, -10)],
+			"props": [_prop(-7.0, 11.5, 6.0, 0.25, Color("d79a4b")), _prop(11.8, -5.0, 0.25, 6.0, Color("56d8c5"))],
+			"environment_profile": "quarter_evening",
+			"reflection_zones": [_reflection(Vector3(-8, 2.0, 8), Vector3(10, 5, 10))],
+			"physics_props": [_physics_prop("quarter_stall_1", Vector3(-4.0, 0.65, 10.0), Vector3(1.8, 1.2, 0.9), "wood", 32.0, 55.0), _physics_prop("quarter_cart_1", Vector3(8.0, 0.55, 4.0), Vector3(1.5, 1.0, 0.8), "wood", 24.0, 45.0)],
+			"interactables": [
+				_interactive("quarter_door", LocalStrikeInteractable.Kind.DOOR, Vector3(-6.2, 1.25, 5.4), Vector3(1.7, 2.5, 0.2), Color("79543d")),
+				_interactive("quarter_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(10.4, 1.2, 3.0), Vector3(2.6, 1.5, 0.07), Color("a9d8d0"), 90.0),
+				_interactive("quarter_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(-11.0, 2.7, -4.0)),
+				_interactive("quarter_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(12.5, 0.5, 9.0))
+			]
+		},
+		{
+			"name": "FROSTLINE STATION",
+			"player_spawn": Vector3(0, 0.05, 13.5),
+			"palette": _palette(Color("a8bfca"), Color("b8c8ce"), Color("596b75"), Color("3f5865"), Color("b8ecff")),
+			"walls": _with_borders([
+				_w(-9.0, -6.0, 1.0, 12.0), _w(9.0, -6.0, 1.0, 12.0), _w(0, -10.5, 10.0, 1.0),
+				_w(-5.5, 5.0, 8.0, 1.0), _w(6.0, 7.5, 1.0, 8.0), _w(0, 0, 4.0, 2.5, "crate"),
+				_w(-12.0, 10.0, 3.0, 2.0, "crate"), _w(12.0, 10.0, 3.0, 2.0, "crate"), _w(0, -14.0, 3.5, 1.4, "crate")
+			]),
+			"sites": [_site("A", -12.0, -10.5, 3.0, Color("70d9ff")), _site("B", 12.0, 10.5, 3.0, Color("ffb15a"))],
+			"bot_spawns": [Vector3(-13, 0.05, -13), Vector3(13, 0.05, -13), Vector3(0, 0.05, -13), Vector3(-12, 0.05, -6), Vector3(12, 0.05, -5)],
+			"patrols": [Vector3(-12, 0, -10), Vector3(-6, 0, 0), Vector3(0, 0, 7), Vector3(7, 0, 4), Vector3(12, 0, -10), Vector3.ZERO],
+			"props": [_prop(-12.5, 0, 0.3, 9.0, Color("70d9ff")), _prop(12.5, 1.0, 0.3, 9.0, Color("ffb15a"))],
+			"environment_profile": "frost_day",
+			"reflection_zones": [_reflection(Vector3.ZERO + Vector3.UP * 2.0, Vector3(16, 5, 16), 0.82)],
+			"physics_props": [_physics_prop("frost_crate_1", Vector3(-5.0, 0.55, 8.5), Vector3(1.1, 1.1, 1.1), "wood"), _physics_prop("frost_case_1", Vector3(7.5, 0.45, -3.0), Vector3(1.4, 0.8, 0.8), "metal", 36.0, 80.0)],
+			"interactables": [
+				_interactive("frost_door", LocalStrikeInteractable.Kind.DOOR, Vector3(4.2, 1.25, 7.4), Vector3(1.7, 2.5, 0.2), Color("567381"), 90.0),
+				_interactive("frost_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-8.8, 1.2, -1.0), Vector3(3.0, 1.6, 0.07), Color("b6ebf5"), 90.0),
+				_interactive("frost_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(10.5, 2.8, 6.0)),
+				_interactive("frost_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(-12.5, 0.5, 9.0))
 			]
 		}
 	]
@@ -1613,6 +1937,10 @@ func _interactive(id: String, kind: int, position: Vector3, size := Vector3.ZERO
 	if color != Color.WHITE:
 		data["color"] = color
 	return data
+
+func _physics_prop(id: String, position: Vector3, size: Vector3, surface := "wood", mass := 22.0, health := 60.0) -> Dictionary:
+	var colors := {"wood": Color("806044"), "metal": Color("42515b"), "glass": Color("8ecbd4")}
+	return {"id": id, "position": position, "size": size, "surface": surface, "mass": mass, "health": health, "color": colors.get(surface, Color("6b7075"))}
 
 func _reflection(position: Vector3, size: Vector3, intensity := 0.72) -> Dictionary:
 	return {"position": position, "size": size, "intensity": intensity}

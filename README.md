@@ -2,7 +2,7 @@
 
 Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt Solo-Bots, LAN-Grundfunktionen, Defusal und Team Deathmatch. Es verwendet keine Counter-Strike-Assets oder geschuetzten Namen.
 
-![Local Strike auf der Karte Solar Lab](docs/gameplay.png)
+![Local Strike auf der Karte Old Quarter](docs/old-quarter.png)
 
 ## Start
 
@@ -10,7 +10,7 @@ Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt So
 - `START_GAME.cmd` startet Forward+ mit Vulkan und wechselt bei einem Startfehler automatisch zu OpenGL. Es findet Godot im Projekt oder ueber `PATH`.
 - `START_GAME_COMPATIBILITY.cmd` erzwingt den sparsamen OpenGL-Modus.
 - `OPEN_EDITOR.cmd` oeffnet das Projekt im Godot-Editor.
-- `RUN_TESTS.cmd` prueft Waffen, 5v5-Spawns, Springen, Trefferzonen, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
+- `RUN_TESTS.cmd` prueft 17 Ausruestungsobjekte, Ballistik, fuenf Karten, 5v5-Spawns, Movement, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
 
 Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des Repositories. Details stehen in `engine/README.md`.
 
@@ -23,10 +23,13 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 
 ## Ausstattung
 
-- Sidearm, Compact SMG, Ranger Rifle, Breacher, Marksman und Heavy Sniper
-- Messer, Frag- und Rauchgranate
+- 14 Waffen inklusive Vanguard Revolver, Whisper SMG, Sentinel Carbine, Hammer Battle Rifle, Cyclone Auto-Shotgun und Bulwark LMG
+- Frag-, Rauch-, Flash- und Brandgranaten mit Sprungphysik, Sichtlinien und Flaechenschaden
+- Fuenf Karten: Harbor Yard, Train Depot, Solar Lab, Old Quarter und Frostline Station
 - Kopf-, Torso- und Gliedmassen-Trefferzonen
-- Rueckstoss, Bewegungsstreuung, Ruestung, Helm und Waffen-Slots
+- Deterministische Rueckstossmuster, ADS, Feuerwahl, Schadensabfall, bis zu drei Durchdringungen und ein Abpraller
+- Bewegliche Kisten und Frachtobjekte, zerstoerbare Deckung, Explosionsimpulse, Waffen-Drops und kosmetische Ragdolls
+- Bodenreibung, Eisflaechen, Luftkontrolle, Fallschaden, sicheres Ducken und automatisches Uebersteigen niedriger Deckung
 - Humanoide Scout-, Assault- und Heavy-Bots mit Sicht, Geraeuschsuche, Teamzielen und drei Schwierigkeitsstufen
 - Schiebetueren mit Blockierschutz, zerbrechliches Glas, ausschaltbare Lampen und explodierende Brennstoffbehaelter
 
@@ -42,6 +45,10 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 
 Die CC0-Herkunft ist in `ASSET_LICENSES.md` dokumentiert.
 
+## Leistung
+
+Der aktuelle Physik-Build erreichte auf einer RTX 3070 bei 1920x1080, Profil Hoch und zehn aktiven Figuren in einer 50-Sekunden-Forward+-Messung durchschnittlich 144 FPS; keines der 200 Samples lag unter 55 FPS. Das maschinenlesbare Ergebnis liegt in `docs/benchmark-physics.json`, der Runner kann mit einer beliebigen Dauer erneut gestartet werden.
+
 ## Steuerung
 
 - `WASD`: bewegen
@@ -51,6 +58,9 @@ Die CC0-Herkunft ist in `ASSET_LICENSES.md` dokumentiert.
 - `Strg`: ducken
 - `Shift`: sprinten
 - `R`: nachladen
+- Rechtsklick: ADS / Zielfernrohr
+- `V`: Feuerart bei Sentinel und Hammer wechseln
+- `G`: nahe Waffe aufnehmen oder aktuelle Schusswaffe fallenlassen
 - `1`: Primaerwaffe
 - `2`: Sidearm
 - `3`: Messer

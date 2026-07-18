@@ -41,6 +41,8 @@ var _scoreboard: PanelContainer
 var _scoreboard_text: Label
 var _spectator_label: Label
 var _damage_flash: ColorRect
+var _flash_overlay: ColorRect
+var _weapon_status_label: Label
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -58,6 +60,7 @@ func _process(delta: float) -> void:
 	else:
 		_hit_marker.visible = false
 	_damage_flash.modulate.a = move_toward(_damage_flash.modulate.a, 0.0, delta * 2.8)
+	_flash_overlay.modulate.a = move_toward(_flash_overlay.modulate.a, 0.0, delta * 0.55)
 
 func _build_ui() -> void:
 	_root = Control.new()
@@ -104,6 +107,7 @@ func _build_game_hud() -> void:
 	_health_label = _bottom_label(Vector2(22, -78), Vector2(165, 62), 20, HORIZONTAL_ALIGNMENT_LEFT)
 	_weapon_label = _bottom_label(Vector2(-190, -78), Vector2(180, 24), 12, HORIZONTAL_ALIGNMENT_RIGHT, 1.0)
 	_ammo_label = _bottom_label(Vector2(-230, -54), Vector2(220, 42), 25, HORIZONTAL_ALIGNMENT_RIGHT, 1.0)
+	_weapon_status_label = _bottom_label(Vector2(210, -78), Vector2(180, 24), 12, HORIZONTAL_ALIGNMENT_LEFT)
 	_charge_label = _bottom_label(Vector2(-110, -78), Vector2(220, 62), 17, HORIZONTAL_ALIGNMENT_CENTER, 0.5)
 	_stamina_bar = ProgressBar.new()
 	_stamina_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -127,6 +131,12 @@ func _build_game_hud() -> void:
 	_damage_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_damage_flash.modulate.a = 0.0
 	_root.add_child(_damage_flash)
+	_flash_overlay = ColorRect.new()
+	_flash_overlay.color = Color.WHITE
+	_flash_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_flash_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_flash_overlay.modulate.a = 0.0
+	_root.add_child(_flash_overlay)
 
 func _build_crosshair() -> void:
 	var crosshair := Control.new()
@@ -178,9 +188,11 @@ func _build_buy_menu() -> void:
 	title.custom_minimum_size.y = 30
 	box.add_child(title)
 	for entry in [
-		["sidearm", "SIDEARM", 0], ["smg", "COMPACT SMG", 1250], ["ranger", "RANGER RIFLE", 2700],
-		["breacher", "BREACHER", 2100], ["marksman", "MARKSMAN", 3300], ["heavy_sniper", "HEAVY SNIPER", 4700],
-		["frag", "FRAG", 300], ["smoke", "SMOKE", 300]
+		["sidearm", "SIDEARM", 0], ["vanguard", "VANGUARD REVOLVER", 850], ["smg", "COMPACT SMG", 1250], ["whisper", "WHISPER SMG", 1550],
+		["ranger", "RANGER RIFLE", 2700], ["sentinel", "SENTINEL CARBINE", 2950], ["hammer", "HAMMER BATTLE RIFLE", 3200],
+		["breacher", "BREACHER", 2100], ["cyclone", "CYCLONE AUTO-SHOTGUN", 2850], ["marksman", "MARKSMAN", 3300],
+		["heavy_sniper", "HEAVY SNIPER", 4700], ["bulwark", "BULWARK LMG", 3900], ["frag", "FRAG", 300], ["smoke", "SMOKE", 300],
+		["flash", "FLASH", 250], ["incendiary", "INCENDIARY", 500]
 	]:
 		var button := Button.new()
 		button.text = "%s    $%d" % [entry[1], entry[2]]
@@ -240,7 +252,7 @@ func _build_main_menu() -> void:
 	subtitle.add_theme_color_override("font_color", Color("56d8c5"))
 	box.add_child(subtitle)
 	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH"])
-	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB"])
+	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB", "OLD QUARTER", "FROSTLINE STATION"])
 	_difficulty_select = _option(["RECRUIT BOTS", "VETERAN BOTS", "ELITE BOTS"])
 	_difficulty_select.select(1)
 	_quality_select = _option(["QUALITY: HIGH", "QUALITY: MEDIUM", "QUALITY: LOW"])
@@ -309,7 +321,7 @@ func show_server(server: Dictionary) -> void:
 		_server_list.set_item_text(existing, label)
 
 func update_state(data: Dictionary) -> void:
-	_map_label.text = "MAP %d/3\n%s" % [data.map_index + 1, data.map_name]
+	_map_label.text = "MAP %d/%d\n%s" % [data.map_index + 1, data.get("map_count", 5), data.map_name]
 	_phase_label.text = data.phase
 	_timer_label.text = data.time
 	_score_label.text = "%d : %d" % [data.attack_score, data.defense_score]
@@ -317,6 +329,7 @@ func update_state(data: Dictionary) -> void:
 	_health_label.text = "HP %d    ARMOR %d" % [ceili(data.health), ceili(data.armor)]
 	_weapon_label.text = data.weapon
 	_ammo_label.text = data.ammo
+	_weapon_status_label.text = "%s   %s" % [data.get("fire_mode", "SEMI"), "ADS" if data.get("aiming", false) else "HIP"]
 	_charge_label.text = data.charge
 	_stamina_bar.value = data.stamina
 	_buy_panel.visible = data.buy_visible
@@ -363,6 +376,9 @@ func show_hit(killed: bool) -> void:
 
 func show_damage() -> void:
 	_damage_flash.modulate.a = 1.0
+
+func show_flash(intensity: float) -> void:
+	_flash_overlay.modulate.a = maxf(_flash_overlay.modulate.a, clampf(intensity, 0.0, 1.0))
 
 func set_paused(value: bool) -> void:
 	_pause_panel.visible = value

@@ -22,6 +22,19 @@ enum Slot { MELEE, PRIMARY, SECONDARY, GRENADE }
 @export var recoil_pitch := 0.018
 @export var recoil_yaw := 0.008
 @export var category := "rifle"
+@export var fire_modes: Array[String] = ["auto"]
+@export var recoil_pattern: Array[Vector2] = []
+@export var falloff_start := 18.0
+@export var falloff_end := 55.0
+@export var minimum_damage_multiplier := 0.62
+@export var penetration_power := 0.7
+@export var armor_penetration := 0.55
+@export var ads_fov := 62.0
+@export var ads_spread_multiplier := 0.42
+@export var equip_time := 0.42
+@export var weight := 1.0
+@export var shot_impulse := 3.0
+@export var sound_profile := "rifle"
 @export var view_model_path := ""
 @export var world_model_path := ""
 @export var animation_profile := "rifle"
@@ -32,5 +45,10 @@ enum Slot { MELEE, PRIMARY, SECONDARY, GRENADE }
 static func create(data: Dictionary) -> LocalStrikeWeaponDefinition:
 	var weapon := LocalStrikeWeaponDefinition.new()
 	for property in data:
-		weapon.set(property, data[property])
+		if property == "fire_modes":
+			weapon.fire_modes.assign(data[property])
+		elif property == "recoil_pattern":
+			weapon.recoil_pattern.assign(data[property])
+		else:
+			weapon.set(property, data[property])
 	return weapon

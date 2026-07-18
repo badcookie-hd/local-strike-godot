@@ -11,6 +11,8 @@ extends Resource
 @export var props: Array = []
 @export var interactables: Array = []
 @export var reflection_zones: Array = []
+@export var physics_props: Array = []
+@export var destructibles: Array = []
 @export var environment_profile := "outdoor"
 
 static func create(data: Dictionary) -> LocalStrikeMapDefinition:
@@ -23,10 +25,11 @@ static func create(data: Dictionary) -> LocalStrikeMapDefinition:
 	definition.props = data.get("props", []).duplicate(true)
 	definition.interactables = data.get("interactables", []).duplicate(true)
 	definition.reflection_zones = data.get("reflection_zones", []).duplicate(true)
+	definition.physics_props = data.get("physics_props", []).duplicate(true)
+	definition.destructibles = data.get("destructibles", []).duplicate(true)
 	definition.environment_profile = str(data.get("environment_profile", "outdoor"))
 	for spawn in data.get("bot_spawns", []):
 		definition.bot_spawns.append(spawn)
 	for patrol in data.get("patrols", []):
 		definition.patrols.append(patrol)
 	return definition
-

@@ -1,5 +1,9 @@
 extends SceneTree
 
+const Ballistics = preload("res://scripts/ballistics_manager.gd")
+const SurfaceProfile = preload("res://scripts/surface_profile.gd")
+const PhysicsProp = preload("res://scripts/physics_prop.gd")
+
 var _failed := false
 
 func _initialize() -> void:
@@ -8,6 +12,7 @@ func _initialize() -> void:
 func _run() -> void:
 	print("TEST_STAGE weapon_data")
 	_test_weapon_data()
+	_test_ballistics_data()
 	print("TEST_STAGE interactions")
 	await _test_interactables()
 	print("TEST_STAGE effect_limits")
@@ -22,10 +27,17 @@ func _run() -> void:
 	_check(game.enemies.size() == 5, "defusal spawns five opponents")
 	_check(game.allies.size() == 4, "solo defusal spawns four allies")
 	_check(game.phase == game.Phase.BUY, "defusal starts in buy phase")
-	_check(game.levels.size() == 3, "three map definitions are available")
+	_check(game.levels.size() == 5, "five map definitions are available")
 	_check(game.current_level is LocalStrikeMapDefinition, "maps use typed definitions")
 	_check(game.current_level.sites.size() == 2, "map keeps two bomb sites")
 	_check(game.interactables.size() == 4, "map spawns door, glass, lamp and fuel")
+	_check(game.physics_props.size() >= 2, "map spawns gameplay physics props")
+	game.player.grant_weapon("sentinel")
+	var first_mode: String = game.player.fire_mode
+	game.player.cycle_fire_mode()
+	_check(game.player.fire_mode != first_mode, "player can switch supported fire mode")
+	var dropped: Dictionary = game.player.remove_current_weapon_for_drop()
+	_check(dropped.key == "sentinel" and dropped.ammo > 0, "weapon drop preserves magazine state")
 	game.player.grant_weapon("smoke")
 	game.player.shoot()
 	print("TEST_STAGE movement")
@@ -54,12 +66,27 @@ func _run() -> void:
 
 func _test_weapon_data() -> void:
 	var catalog := LocalStrikeWeaponCatalog.all()
-	_check(catalog.size() == 9, "complete weapon catalog")
+	_check(catalog.size() == 17, "complete weapon catalog")
 	for key in catalog:
 		var weapon: LocalStrikeWeaponDefinition = catalog[key]
 		_check(not weapon.display_name.is_empty(), "%s has display name" % key)
 		_check(weapon.magazine > 0, "%s has valid magazine" % key)
 		_check(weapon.range > 0.0, "%s has valid range" % key)
+		_check(not weapon.recoil_pattern.is_empty() or weapon.slot in [LocalStrikeWeaponDefinition.Slot.GRENADE, LocalStrikeWeaponDefinition.Slot.MELEE], "%s has recoil data" % key)
+
+func _test_ballistics_data() -> void:
+	var rifle := LocalStrikeWeaponCatalog.get_weapon("sentinel")
+	var close_damage: float = Ballistics.damage_at_distance(rifle, rifle.falloff_start)
+	var far_damage: float = Ballistics.damage_at_distance(rifle, rifle.falloff_end)
+	_check(far_damage < close_damage and far_damage >= rifle.damage * rifle.minimum_damage_multiplier, "distance falloff is bounded")
+	var spread_a: Vector2 = Ballistics.deterministic_spread(rifle, 12, 0, rifle.spread)
+	var spread_b: Vector2 = Ballistics.deterministic_spread(rifle, 12, 0, rifle.spread)
+	_check(spread_a == spread_b, "shot spread is deterministic")
+	_check(rifle.fire_modes.has("semi") and rifle.fire_modes.has("auto"), "sentinel supports validated fire selection")
+	var metal: Dictionary = SurfaceProfile.get_profile("metal")
+	var ice: Dictionary = SurfaceProfile.get_profile("ice")
+	_check(float(metal.penetration_resistance) > float(SurfaceProfile.get_profile("wood").penetration_resistance), "metal resists penetration more than wood")
+	_check(float(ice.friction) < 0.25, "ice uses low movement friction")
 
 func _test_interactables() -> void:
 	var holder := Node3D.new()
@@ -96,6 +123,16 @@ func _test_interactables() -> void:
 	_check(lamp.destroyed, "lamp breaks at 20 damage")
 	fuel.take_damage(65.0)
 	_check(fuel.armed and not fuel.destroyed, "fuel starts 1.2 second warning phase")
+	var prop = PhysicsProp.new()
+	prop.configure({"id": "test-crate", "surface": "wood", "health": 25.0, "mass": 10.0})
+	holder.add_child(prop)
+	await physics_frame
+	prop.apply_gameplay_impulse(Vector3(4, 1, 0))
+	_check(prop.revision == 1 and prop.linear_velocity.length() > 0.0, "physics prop accepts gameplay impulse")
+	prop.take_damage(25.0)
+	_check(prop.destroyed_state, "destructible physics prop reaches destroyed state")
+	prop.reset_state()
+	_check(not prop.destroyed_state and is_equal_approx(prop.health, 25.0), "physics prop resets between rounds")
 	fuel.reset_state()
 	holder.queue_free()
 	await process_frame

@@ -1,0 +1,10 @@
+{
+  "actors": 10,
+  "average_fps": 144.0,
+  "duration_seconds": 50.0,
+  "minimum_sample_fps": 144.0,
+  "profile": "HIGH",
+  "resolution": "1920x1080",
+  "sample_count": 200,
+  "samples_below_55": 0
+}

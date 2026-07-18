@@ -11,8 +11,21 @@ var _armed := true
 
 func configure(kind: String, impulse: Vector3) -> void:
 	grenade_kind = kind
-	damage = 0.0 if kind == "smoke" else 88.0
-	radius = 6.5 if kind == "smoke" else 7.0
+	match kind:
+		"smoke":
+			damage = 0.0
+			radius = 6.5
+		"flash":
+			damage = 0.0
+			radius = 14.0
+			fuse = 1.65
+		"incendiary":
+			damage = 0.0
+			radius = 3.5
+			fuse = 1.8
+		_:
+			damage = 88.0
+			radius = 7.0
 	linear_velocity = impulse
 
 func _ready() -> void:
@@ -21,6 +34,10 @@ func _ready() -> void:
 	mass = 0.42
 	gravity_scale = 1.25
 	continuous_cd = true
+	var physics_material := PhysicsMaterial.new()
+	physics_material.friction = 0.62
+	physics_material.bounce = 0.42
+	physics_material_override = physics_material
 	_build_visual()
 
 func _physics_process(delta: float) -> void:
@@ -45,7 +62,8 @@ func _build_visual() -> void:
 	mesh.radial_segments = 12
 	body.mesh = mesh
 	var material := StandardMaterial3D.new()
-	material.albedo_color = Color("71816c") if grenade_kind == "smoke" else Color("3e4b38")
+	var colors := {"smoke": Color("71816c"), "flash": Color("d7d6c9"), "incendiary": Color("8f3e2b")}
+	material.albedo_color = colors.get(grenade_kind, Color("3e4b38"))
 	material.metallic = 0.42
 	material.roughness = 0.48
 	body.material_override = material
@@ -58,7 +76,8 @@ func _build_visual() -> void:
 	band_mesh.ring_segments = 6
 	band.mesh = band_mesh
 	var band_material := StandardMaterial3D.new()
-	band_material.albedo_color = Color("a9d8ff") if grenade_kind == "smoke" else Color("f3b447")
+	var band_colors := {"smoke": Color("a9d8ff"), "flash": Color.WHITE, "incendiary": Color("ff6a2e")}
+	band_material.albedo_color = band_colors.get(grenade_kind, Color("f3b447"))
 	band_material.emission_enabled = true
 	band_material.emission = band_material.albedo_color * 0.35
 	band.material_override = band_material

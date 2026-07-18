@@ -1,6 +1,9 @@
 class_name LocalStrikeEnemy
 extends CharacterBody3D
 
+const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
+const Ballistics = preload("res://scripts/ballistics_manager.gd")
+
 signal died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String)
 signal shot_fired(origin: Vector3, end: Vector3, hit: bool)
 
@@ -24,6 +27,7 @@ var reaction_time := 0.34
 var damage_scale := 1.0
 var preferred_distance := 8.0
 var radius := 0.38
+var weapon_key := "ranger"
 
 var _state := State.PATROL
 var _shoot_cooldown := 1.0
@@ -57,6 +61,7 @@ func _ready() -> void:
 func _apply_profile() -> void:
 	match enemy_kind:
 		"scout":
+			weapon_key = "whisper"
 			health = 74.0
 			speed = 3.25
 			fire_delay = 0.66
@@ -65,6 +70,7 @@ func _apply_profile() -> void:
 			preferred_distance = 6.0
 			radius = 0.31
 		"heavy":
+			weapon_key = "bulwark"
 			health = 175.0
 			speed = 1.75
 			fire_delay = 1.16
@@ -73,6 +79,7 @@ func _apply_profile() -> void:
 			preferred_distance = 10.0
 			radius = 0.48
 		_:
+			weapon_key = "sentinel"
 			health = 105.0
 			speed = 2.35
 			fire_delay = 0.9
@@ -271,18 +278,21 @@ func _can_see_player() -> bool:
 	return not result.is_empty() and result.collider == target_player
 
 func _shoot(distance: float) -> void:
-	_shoot_cooldown = fire_delay + randf_range(0.0, 0.24)
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	var uses_ads := distance > preferred_distance * 0.8
+	_shoot_cooldown = maxf(fire_delay * 0.45, spec.fire_delay * (1.08 if uses_ads else 1.25)) + randf_range(0.0, 0.12)
 	var origin := _muzzle.global_position
 	var end := target_player.global_position + Vector3.UP * 1.15
-	var chance := clampf(accuracy - distance / 70.0, 0.12, 0.9)
+	var chance := clampf(accuracy - distance / 85.0 + (0.12 if uses_ads else 0.0), 0.12, 0.92)
 	var hit := randf() <= chance
 	if hit:
 		var zone := "head" if randf() < 0.09 * accuracy else ("limb" if randf() < 0.24 else "torso")
-		var zone_scale := 1.8 if zone == "head" else (0.72 if zone == "limb" else 1.0)
+		var zone_scale := minf(2.0, spec.head_multiplier) if zone == "head" else (spec.limb_multiplier if zone == "limb" else 1.0)
+		var shot_damage: float = Ballistics.damage_at_distance(spec, distance) * 0.42 * damage_scale * zone_scale
 		if target_player.has_method("apply_damage"):
-			target_player.apply_damage(randf_range(8.0, 15.0) * damage_scale * zone_scale, zone)
+			target_player.apply_damage(shot_damage, zone)
 		elif target_player.has_method("take_damage"):
-			target_player.take_damage(randf_range(8.0, 15.0) * damage_scale * zone_scale, zone)
+			target_player.take_damage(shot_damage, zone)
 	else:
 		end += Vector3(randf_range(-2.2, 2.2), randf_range(-1.1, 1.1), randf_range(-2.2, 2.2))
 	shot_fired.emit(origin, end, hit)
