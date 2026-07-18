@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://scripts/foundry_map.gd" type="Script" id="1_foundry"]
+
+[node name="FoundrySandbox" type="Node3D"]
+script = ExtResource("1_foundry")
+
+[node name="LightmapGI" type="LightmapGI" parent="."]
+quality = 2
+bake_quality = 2
+texel_scale = 0.2

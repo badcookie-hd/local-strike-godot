@@ -17,6 +17,10 @@ const PhysicsPropScript = preload("res://scripts/physics_prop.gd")
 const DroppedWeaponScript = preload("res://scripts/dropped_weapon.gd")
 const FireZoneScript = preload("res://scripts/fire_zone.gd")
 const RagdollScript = preload("res://scripts/ragdoll.gd")
+const SandboxBrowserScene = preload("res://scenes/ui/sandbox_browser.tscn")
+const SandboxSpawnControllerScript = preload("res://scripts/sandbox_spawn_controller.gd")
+const SandboxItemDefinition = preload("res://scripts/sandbox_item_definition.gd")
+const FoundryScene = preload("res://scenes/maps/foundry_sandbox.tscn")
 const ConcreteDiffuse = preload("res://assets/textures/concrete_floor_worn_001_diff_1k.jpg")
 const ConcreteNormal = preload("res://assets/textures/concrete_floor_worn_001_normal_1k.jpg")
 const ConcreteArm = preload("res://assets/textures/concrete_floor_worn_001_arm_1k.jpg")
@@ -84,6 +88,8 @@ var next_drop_id := 1
 var sandbox_god_mode := true
 var sandbox_slow_motion := false
 var sandbox_spawn_serial := 0
+var sandbox_browser: LocalStrikeSandboxBrowser
+var sandbox_spawn_controller: LocalStrikeSandboxSpawnController
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -127,6 +133,18 @@ func _ready() -> void:
 	hud.quality_changed.connect(_apply_quality)
 	hud.sandbox_action_requested.connect(_on_sandbox_action)
 	add_child(hud)
+	sandbox_spawn_controller = SandboxSpawnControllerScript.new()
+	sandbox_spawn_controller.name = "SandboxSpawnController"
+	sandbox_spawn_controller.configure(player)
+	sandbox_spawn_controller.placement_confirmed.connect(_on_sandbox_placement_confirmed)
+	sandbox_spawn_controller.placement_state_changed.connect(_on_sandbox_placement_state_changed)
+	add_child(sandbox_spawn_controller)
+	sandbox_browser = SandboxBrowserScene.instantiate()
+	sandbox_browser.placement_requested.connect(_on_sandbox_placement_requested)
+	sandbox_browser.equip_requested.connect(func(weapon_id: String): _equip_sandbox_weapon({"weapon": weapon_id}))
+	sandbox_browser.world_action_requested.connect(_on_sandbox_action)
+	sandbox_browser.browser_visibility_changed.connect(_on_sandbox_browser_visibility_changed)
+	add_child(sandbox_browser)
 	NetworkManager.server_discovered.connect(hud.show_server)
 	NetworkManager.connection_state_changed.connect(_on_connection_state_changed)
 	NetworkManager.peer_joined.connect(_on_network_peer_joined)
@@ -156,13 +174,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("drop_weapon"):
 		_handle_weapon_pickup_or_drop()
 	if event.is_action_pressed("toggle_buy"):
-		show_buy = not show_buy
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if show_buy else Input.MOUSE_MODE_CAPTURED
+		if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+			sandbox_browser.toggle_browser()
+		else:
+			show_buy = not show_buy
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if show_buy else Input.MOUSE_MODE_CAPTURED
+		get_viewport().set_input_as_handled()
+		return
 	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 		if event.is_action_pressed("sandbox_enemy"):
-			_on_sandbox_action("spawn_bot", hud.get_sandbox_bot_config("enemy"))
+			_on_sandbox_action("spawn_bot", {"team": "enemy", "kind": "assault", "weapon": "sentinel", "behavior": "aggressive", "count": 1})
 		elif event.is_action_pressed("sandbox_ally"):
-			_on_sandbox_action("spawn_bot", hud.get_sandbox_bot_config("ally"))
+			_on_sandbox_action("spawn_bot", {"team": "ally", "kind": "assault", "weapon": "sentinel", "behavior": "aggressive", "count": 1})
 		elif event.is_action_pressed("sandbox_prop"):
 			_on_sandbox_action("spawn_wood", {})
 		elif event.is_action_pressed("sandbox_blast"):
@@ -171,7 +194,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_on_sandbox_action("slow_motion", {"enabled": not sandbox_slow_motion})
 		elif event.is_action_pressed("sandbox_clear"):
 			_on_sandbox_action("clear", {})
-	if (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.SANDBOX) and event.is_action_pressed("map_next"):
+	if phase == Phase.BUY and game_mode != LocalStrikeMatchConfig.Mode.SANDBOX and event.is_action_pressed("map_next"):
 		level_index = (level_index + 1) % levels.size()
 		if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 			_reset_round(false)
@@ -273,7 +296,7 @@ func _refresh_servers() -> void:
 func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	Engine.time_scale = 1.0
 	game_mode = config.mode
-	level_index = clampi(config.map_index, 0, levels.size() - 1)
+	level_index = levels.size() - 1 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else clampi(config.map_index, 0, levels.size() - 2)
 	bot_difficulty = config.bot_difficulty
 	attack_score = 0
 	defense_score = 0
@@ -291,6 +314,7 @@ func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	match_over = false
 	started = true
 	hud.set_deployed(true)
+	sandbox_browser.set_sandbox_active(game_mode == LocalStrikeMatchConfig.Mode.SANDBOX)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_reset_round(false)
 	var mode_name := "DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else ("TEAM DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else "SANDBOX")
@@ -309,6 +333,8 @@ func _restart_match() -> void:
 	started = true
 	player.enabled = true
 	hud.set_deployed(true)
+	sandbox_browser.set_sandbox_active(game_mode == LocalStrikeMatchConfig.Mode.SANDBOX)
+	sandbox_spawn_controller.cancel_placement(false)
 	_reset_round(false)
 	hud.show_toast("Match restarted")
 
@@ -351,6 +377,8 @@ func _reset_round(show_message: bool) -> void:
 		hud.show_toast("Round %d: %s" % [round_no, current_level.map_name])
 
 func _load_level(index: int) -> void:
+	if sandbox_spawn_controller != null:
+		sandbox_spawn_controller.cancel_placement(false)
 	for child in level_root.get_children():
 		child.queue_free()
 	for enemy in enemies:
@@ -371,15 +399,20 @@ func _load_level(index: int) -> void:
 
 	current_level = levels[index]
 	_update_environment(current_level.palette)
-	_create_floor(current_level.palette)
-	for wall_data in current_level.walls:
-		_create_wall(wall_data, current_level.palette)
-	for prop_data in current_level.props:
-		_create_prop(prop_data)
-	for site_data in current_level.sites:
-		_create_site(site_data)
-	_create_map_beacons(current_level.palette)
-	_create_map_identity_props()
+	if current_level.environment_profile == "foundry_night":
+		var foundry := FoundryScene.instantiate()
+		foundry.name = "AbandonedFoundry"
+		level_root.add_child(foundry)
+	else:
+		_create_floor(current_level.palette)
+		for wall_data in current_level.walls:
+			_create_wall(wall_data, current_level.palette)
+		for prop_data in current_level.props:
+			_create_prop(prop_data)
+		for site_data in current_level.sites:
+			_create_site(site_data)
+		_create_map_beacons(current_level.palette)
+		_create_map_identity_props()
 	_create_interactables()
 	_create_physics_props()
 	_create_reflection_probes()
@@ -397,9 +430,6 @@ func _spawn_teams() -> void:
 	if _is_network_client():
 		return
 	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
-		for i in range(3):
-			var bot := _spawn_bot(1, i, current_level.bot_spawns[i % current_level.bot_spawns.size()])
-			enemies.append(bot)
 		_refresh_bot_opponents()
 		return
 	var human_players := 1 + multiplayer.get_peers().size() if NetworkManager.peer != null else 1
@@ -743,19 +773,141 @@ func _update_sandbox(delta: float) -> void:
 			player.invulnerable = sandbox_god_mode
 			player.unlimited_ammo = true
 
+func _on_sandbox_browser_visibility_changed(visible: bool) -> void:
+	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX:
+		return
+	player.combat_input_blocked = visible or sandbox_spawn_controller.is_placing()
+
+func _on_sandbox_placement_requested(definition: LocalStrikeSandboxItemDefinition, options: Dictionary) -> void:
+	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX or not started:
+		return
+	sandbox_spawn_controller.begin_placement(definition, options)
+	player.combat_input_blocked = true
+
+func _on_sandbox_placement_state_changed(active: bool, valid: bool, item_name: String) -> void:
+	sandbox_browser.set_placement_state(active, valid, item_name)
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		player.combat_input_blocked = active or sandbox_browser.is_open()
+
+func _on_sandbox_placement_confirmed(definition: LocalStrikeSandboxItemDefinition, placement: Transform3D, options: Dictionary) -> void:
+	match definition.kind:
+		SandboxItemDefinition.Kind.BOT:
+			if not definition.bot_kind.is_empty():
+				options["kind"] = definition.bot_kind
+			_spawn_sandbox_bot_at(options, placement)
+		SandboxItemDefinition.Kind.WEAPON:
+			options["weapon"] = definition.weapon_key
+			_spawn_sandbox_weapon_at(options, placement)
+		SandboxItemDefinition.Kind.PROP:
+			_spawn_sandbox_prop_at(definition.surface_type, placement, int(options.get("count", 1)))
+	player.combat_input_blocked = false
+
+func _spawn_sandbox_bot_at(config: Dictionary, placement: Transform3D) -> int:
+	var available := mini(clampi(int(config.get("count", 1)), 1, 10), 40 - enemies.size() - allies.size())
+	if available <= 0:
+		hud.show_toast("Bot limit reached", 1.4)
+		return 0
+	var team := player_team if str(config.get("team", "enemy")) == "ally" else 1 - player_team
+	var kind := str(config.get("kind", "assault"))
+	if kind not in ["scout", "assault", "heavy"]:
+		kind = "assault"
+	var weapon := str(config.get("weapon", "sentinel"))
+	if weapon not in WeaponCatalog.bot_weapon_keys():
+		weapon = "sentinel"
+	var behavior := str(config.get("behavior", "aggressive"))
+	if behavior not in ["aggressive", "guard", "passive"]:
+		behavior = "aggressive"
+	var columns := mini(4, ceili(sqrt(float(available))))
+	var rows := ceili(float(available) / float(columns))
+	for index in range(available):
+		var column := index % columns
+		var row := int(index / columns)
+		var local_offset := Vector3((float(column) - float(columns - 1) * 0.5) * 1.15, 0.05, (float(row) - float(rows - 1) * 0.5) * 1.15)
+		var position := placement.origin + placement.basis * local_offset
+		sandbox_spawn_serial += 1
+		var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position, {"kind": kind, "weapon": weapon, "behavior": behavior})
+		bot.guard_anchor = position
+		if team == player_team:
+			allies.append(bot)
+		else:
+			enemies.append(bot)
+	_refresh_bot_opponents()
+	hud.show_toast("%d %s %s placed" % [available, kind.capitalize(), "allies" if team == player_team else "enemies"], 1.4)
+	return available
+
+func _spawn_sandbox_weapon_at(config: Dictionary, placement: Transform3D) -> int:
+	var key := str(config.get("weapon", "ranger"))
+	if key not in WeaponCatalog.sandbox_weapon_keys():
+		key = "ranger"
+	var available := mini(clampi(int(config.get("count", 1)), 1, 10), 32 - dropped_weapons.size())
+	if available <= 0:
+		hud.show_toast("Weapon limit reached", 1.4)
+		return 0
+	var spec := WeaponCatalog.get_weapon(key)
+	for index in range(available):
+		var column := index % 4
+		var row := int(index / 4)
+		var local_offset := Vector3((float(column) - minf(1.5, float(available - 1) * 0.5)) * 0.58, row * 0.18, row * 0.48)
+		var position := placement.origin + placement.basis * local_offset
+		var drop: LocalStrikeDroppedWeapon = _spawn_dropped_weapon(key, spec.magazine, spec.reserve, position, Vector3.UP * 0.4, "", 0.0)
+		drop.global_basis = placement.basis
+	hud.show_toast("%d x %s placed" % [available, spec.display_name], 1.3)
+	return available
+
+func _spawn_sandbox_prop_at(surface_type: String, placement: Transform3D, requested_count: int) -> int:
+	var available := mini(clampi(requested_count, 1, 8), 64 - _sandbox_prop_count())
+	if available <= 0:
+		hud.show_toast("Physics prop limit reached", 1.4)
+		return 0
+	var size := Vector3(1.15, 1.15, 1.15)
+	var mass := 18.0
+	var health := 55.0
+	var resolved_surface := surface_type
+	match surface_type:
+		"metal":
+			size = Vector3(1.5, 0.82, 0.9)
+			mass = 38.0
+			health = 95.0
+		"barrel":
+			size = Vector3(0.72, 1.12, 0.72)
+			mass = 24.0
+			health = 65.0
+			resolved_surface = "metal"
+		"tool_cart":
+			size = Vector3(1.4, 1.05, 0.72)
+			mass = 31.0
+			health = 88.0
+			resolved_surface = "metal"
+	for index in range(available):
+		sandbox_spawn_serial += 1
+		var prop_id := "sandbox_prop_%d" % sandbox_spawn_serial
+		var local_offset := Vector3(float(index % 4) * (size.x + 0.18), float(int(index / 4)) * 0.12, float(int(index / 4)) * (size.z + 0.18))
+		var transform := placement.translated_local(local_offset)
+		var data := _physics_prop(prop_id, transform.origin, size, resolved_surface, mass, health)
+		data["variant"] = surface_type
+		var prop: LocalStrikePhysicsProp = PhysicsPropScript.new()
+		prop.configure(data)
+		prop.transform = transform
+		prop.state_changed.connect(_on_physics_prop_state_changed)
+		prop.destroyed.connect(_on_physics_prop_destroyed)
+		level_root.add_child(prop)
+		physics_props[prop_id] = prop
+	hud.show_toast("%d %s props placed" % [available, surface_type.replace("_", " ").capitalize()], 1.3)
+	return available
+
 func _on_sandbox_action(action: String, payload: Dictionary) -> void:
 	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX or not started:
 		return
 	match action:
 		"god_mode":
-			sandbox_god_mode = bool(payload.get("enabled", false))
+			sandbox_god_mode = bool(payload.get("enabled", not sandbox_god_mode))
 			player.invulnerable = sandbox_god_mode
 			if sandbox_god_mode:
 				player.health = 100.0
 				player.armor = 100.0
 			hud.show_toast("God mode %s" % ["enabled" if sandbox_god_mode else "disabled"], 1.4)
 		"slow_motion":
-			sandbox_slow_motion = bool(payload.get("enabled", false))
+			sandbox_slow_motion = bool(payload.get("enabled", not sandbox_slow_motion))
 			Engine.time_scale = 0.32 if sandbox_slow_motion else 1.0
 			hud.show_toast("Slow motion %s" % ["enabled" if sandbox_slow_motion else "disabled"], 1.4)
 		"spawn_bot":
@@ -782,6 +934,8 @@ func _on_sandbox_action(action: String, payload: Dictionary) -> void:
 			_clear_sandbox_npcs(true)
 		"clear_weapons":
 			_clear_sandbox_weapons(true)
+		"clear_props":
+			_clear_sandbox_props(true)
 		"clear_blood":
 			_clear_sandbox_blood(true)
 		"remove_target":
@@ -825,7 +979,7 @@ func _spawn_sandbox_wave() -> void:
 		hud.show_toast("Brawl wave: %d vs %d" % [enemy_count, ally_count], 1.4)
 
 func _spawn_sandbox_prop(surface_type: String) -> void:
-	if physics_props.size() >= 64:
+	if _sandbox_prop_count() >= 64:
 		hud.show_toast("Physics prop limit reached", 1.3)
 		return
 	sandbox_spawn_serial += 1
@@ -915,6 +1069,12 @@ func _sandbox_target_position(height_offset: float) -> Vector3:
 func _clear_sandbox_spawns() -> void:
 	_clear_sandbox_npcs(false)
 	_clear_sandbox_weapons(false)
+	_clear_sandbox_props(false)
+	_clear_sandbox_blood(false)
+	_refresh_bot_opponents()
+	hud.show_toast("Spawned objects cleared", 1.3)
+
+func _clear_sandbox_props(show_message: bool) -> void:
 	var prop_ids: Array[String] = []
 	for prop_id in physics_props:
 		if str(prop_id).begins_with("sandbox_prop_"):
@@ -923,9 +1083,15 @@ func _clear_sandbox_spawns() -> void:
 		if is_instance_valid(physics_props[prop_id]):
 			physics_props[prop_id].queue_free()
 		physics_props.erase(prop_id)
-	_clear_sandbox_blood(false)
-	_refresh_bot_opponents()
-	hud.show_toast("Spawned objects cleared", 1.3)
+	if show_message:
+		hud.show_toast("Spawned props removed", 1.2)
+
+func _sandbox_prop_count() -> int:
+	var count := 0
+	for prop_id in physics_props:
+		if str(prop_id).begins_with("sandbox_prop_"):
+			count += 1
+	return count
 
 func _clear_sandbox_npcs(show_message: bool) -> void:
 	for bot in allies + enemies:
@@ -1564,6 +1730,16 @@ func _update_environment(palette: Dictionary) -> void:
 			environment.ambient_light_energy = 0.46
 			environment.fog_density = 0.014
 			environment.volumetric_fog_density = 0.026
+		"foundry_night":
+			sun.rotation_degrees = Vector3(-68, 28, 0)
+			sun.light_energy = 0.16
+			sun.light_color = Color("78989d")
+			environment.ambient_light_color = Color("26363a")
+			environment.ambient_light_energy = 0.38
+			environment.fog_light_color = Color("182629")
+			environment.fog_density = 0.018
+			environment.volumetric_fog_density = 0.032
+			environment.tonemap_exposure = 1.2
 
 func _apply_quality(index: int) -> void:
 	current_quality = clampi(index, 0, 2)
@@ -2150,6 +2326,9 @@ func _update_hud() -> void:
 		if is_instance_valid(ally): ally_positions.append(ally.global_position)
 	for enemy in enemies:
 		if is_instance_valid(enemy): enemy_positions.append(enemy.global_position)
+	var sandbox_prop_count := _sandbox_prop_count()
+	if sandbox_browser != null:
+		sandbox_browser.set_counts(enemies.size() + allies.size(), sandbox_prop_count, dropped_weapons.size(), sandbox_ragdolls.size())
 	hud.update_state({
 		"map_index": level_index,
 		"map_count": levels.size(),
@@ -2168,8 +2347,8 @@ func _update_hud() -> void:
 		"aiming": player.aiming,
 		"charge": charge_text,
 		"stamina": player.stamina,
-		"buy_visible": show_buy and started and (phase == Phase.BUY or game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX]),
-		"sandbox_visible": show_buy and started and game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
+		"buy_visible": show_buy and started and game_mode != LocalStrikeMatchConfig.Mode.SANDBOX and (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH),
+		"sandbox_visible": false,
 		"sandbox_npcs": enemies.size() + allies.size(),
 		"sandbox_props": physics_props.size() + dropped_weapons.size(),
 		"sandbox_weapons": dropped_weapons.size(),
@@ -2365,6 +2544,31 @@ func _create_levels() -> Array[LocalStrikeMapDefinition]:
 			]
 		}
 	]
+	data.append({
+		"name": "ABANDONED FOUNDRY",
+		"player_spawn": Vector3(0.0, 0.08, 13.5),
+		"palette": _palette(Color("080b0d"), Color("353a3b"), Color("4b4f4e"), Color("6e5541"), Color("8db7b4")),
+		"walls": [],
+		"sites": [],
+		"bot_spawns": [Vector3(17, 0.08, -14), Vector3(16, 0.08, 10), Vector3(-15, 0.08, -14), Vector3(7, 0.08, 12), Vector3(-7, 0.08, 2)],
+		"patrols": [Vector3(-17, 0.08, -13), Vector3(-6, 0.08, -8), Vector3(3, 0.08, 8), Vector3(17, 0.08, 13), Vector3(18, 0.08, -10), Vector3(-16, 0.08, 12)],
+		"props": [],
+		"environment_profile": "foundry_night",
+		"reflection_zones": [],
+		"physics_props": [
+			_physics_prop("foundry_crate_1", Vector3(-17.2, 0.58, -5.6), Vector3(1.15, 1.15, 1.15), "wood", 18.0, 55.0),
+			_physics_prop("foundry_crate_2", Vector3(-15.8, 0.58, -5.2), Vector3(1.15, 1.15, 1.15), "wood", 18.0, 55.0),
+			_physics_prop("foundry_case_1", Vector3(10.2, 0.42, 10.5), Vector3(1.5, 0.82, 0.9), "metal", 38.0, 95.0),
+			_physics_prop("foundry_barrel_1", Vector3(8.8, 0.56, -8.7), Vector3(0.72, 1.12, 0.72), "metal", 24.0, 65.0),
+			_physics_prop("foundry_barrel_2", Vector3(10.0, 0.56, -8.4), Vector3(0.72, 1.12, 0.72), "metal", 24.0, 65.0)
+		],
+		"interactables": [
+			_interactive("foundry_door", LocalStrikeInteractable.Kind.DOOR, Vector3(-9.1, 1.25, -6.3), Vector3(1.8, 2.5, 0.2), Color("5d493b"), 90.0),
+			_interactive("foundry_glass", LocalStrikeInteractable.Kind.GLASS, Vector3(-14.2, 4.15, 7.25), Vector3(7.8, 2.1, 0.08), Color("73979c")),
+			_interactive("foundry_lamp", LocalStrikeInteractable.Kind.LAMP, Vector3(-3.5, 5.8, -10.0)),
+			_interactive("foundry_fuel", LocalStrikeInteractable.Kind.FUEL, Vector3(11.2, 0.55, -8.2), Vector3(0.65, 1.1, 0.65), Color("a84231"))
+		]
+	})
 	var definitions: Array[LocalStrikeMapDefinition] = []
 	for entry in data:
 		definitions.append(MapDefinition.create(entry))

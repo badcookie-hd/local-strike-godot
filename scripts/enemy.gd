@@ -6,6 +6,12 @@ const Ballistics = preload("res://scripts/ballistics_manager.gd")
 const MeleeResolver = preload("res://scripts/melee_resolver.gd")
 const WeaponModel = preload("res://scripts/weapon_model.gd")
 
+const CHARACTER_MODELS := {
+	"scout": "res://assets/models/quaternius/modular_men/Punk.gltf",
+	"assault": "res://assets/models/quaternius/modular_men/Worker.gltf",
+	"heavy": "res://assets/models/quaternius/modular_men/Swat.gltf"
+}
+
 signal died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String)
 signal shot_fired(origin: Vector3, end: Vector3, hit: bool)
 signal melee_impact(position: Vector3, normal: Vector3, intensity: float, killed: bool)
@@ -58,6 +64,9 @@ var _walk_phase := 0.0
 var _configured_weapon := ""
 var _held_weapon: Node3D
 var _attack_anim_timer := 0.0
+var _external_character: Node3D
+var _animation_player: AnimationPlayer
+var _current_animation := ""
 
 func configure_spawn(next_team: int, kind: String, next_weapon: String, behavior: String, anchor: Vector3) -> void:
 	team = next_team
@@ -156,6 +165,8 @@ func _build_visual() -> void:
 	_body_root = Node3D.new()
 	add_child(_body_root)
 	_torso_material = _material(_kind_color(), 0.58, 0.08)
+	if _build_external_character():
+		return
 	var armor_material := _material(_kind_color().darkened(0.38), 0.42, 0.32)
 	var fabric_material := _material(Color("252d33"), 0.86, 0.0)
 	var visor_material := _material(Color("101a20"), 0.2, 0.72)
@@ -189,6 +200,48 @@ func _build_visual() -> void:
 	_body_root.add_child(_muzzle)
 	for x in [-0.22, 0.0, 0.22]:
 		_add_box(_body_root, Vector3(0.16, 0.22, 0.09), Vector3(x, 0.92, -radius * 0.58), _material(_kind_color().lightened(0.16), 0.62, 0.08))
+
+func _build_external_character() -> bool:
+	var path := str(CHARACTER_MODELS.get(enemy_kind, CHARACTER_MODELS["assault"]))
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return false
+	_external_character = packed.instantiate()
+	_external_character.name = "ImportedCC0Character"
+	_external_character.rotation_degrees.y = 180.0
+	_external_character.scale = Vector3.ONE * (1.08 if enemy_kind == "heavy" else (0.94 if enemy_kind == "scout" else 1.0))
+	_apply_character_tint(_external_character)
+	_body_root.add_child(_external_character)
+	_animation_player = _external_character.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	_play_character_animation("Idle_Gun" if WeaponCatalog.get_weapon(weapon_key).slot != LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Sword")
+	_held_weapon = WeaponModel.create(weapon_key)
+	_held_weapon.position = Vector3(0.34, 1.08, -0.38)
+	_held_weapon.scale = Vector3.ONE * (0.62 if WeaponCatalog.get_weapon(weapon_key).slot == LocalStrikeWeaponDefinition.Slot.MELEE else 0.54)
+	_body_root.add_child(_held_weapon)
+	_muzzle = Marker3D.new()
+	_muzzle.position = Vector3(0.34, 1.12, -1.25)
+	_body_root.add_child(_muzzle)
+	return true
+
+func _apply_character_tint(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		for surface_index in range(mesh_instance.get_surface_override_material_count()):
+			var source := mesh_instance.get_active_material(surface_index)
+			if source is StandardMaterial3D:
+				var material := source.duplicate() as StandardMaterial3D
+				material.albedo_color = material.albedo_color.lerp(_kind_color(), 0.16)
+				material.roughness = maxf(0.52, material.roughness)
+				mesh_instance.set_surface_override_material(surface_index, material)
+	for child in node.get_children():
+		_apply_character_tint(child)
+
+func _play_character_animation(animation_name: String) -> void:
+	if _animation_player == null or _current_animation == animation_name:
+		return
+	if _animation_player.has_animation(animation_name):
+		_animation_player.play(animation_name, 0.12)
+		_current_animation = animation_name
 
 func _build_navigation() -> void:
 	_navigation = NavigationAgent3D.new()
@@ -439,6 +492,18 @@ func set_objective(position: Vector3, active: bool) -> void:
 
 func _animate_body(delta: float) -> void:
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
+	if _animation_player != null:
+		var spec := WeaponCatalog.get_weapon(weapon_key)
+		var animation := "Idle_Sword" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Gun"
+		if _attack_anim_timer > 0.0:
+			animation = "Sword_Slash" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Gun_Shoot"
+		elif horizontal_speed > 0.4:
+			animation = "Run" if horizontal_speed > 2.6 else "Walk"
+		_play_character_animation(animation)
+		if is_instance_valid(_held_weapon):
+			var target_roll := sin((_attack_anim_timer / maxf(0.01, fire_delay)) * PI) * 0.9 if _attack_anim_timer > 0.0 else 0.0
+			_held_weapon.rotation.z = lerpf(_held_weapon.rotation.z, target_roll, minf(1.0, delta * 15.0))
+		return
 	_walk_phase += delta * horizontal_speed * 4.2
 	var swing := sin(_walk_phase) * minf(28.0, horizontal_speed * 9.0)
 	_left_leg.rotation_degrees.x = swing

@@ -12,6 +12,7 @@ func _capture() -> void:
 	var output_path := args[4] if args.size() > 4 else "user://visual_capture.png"
 	var clean_hud := args.size() > 5 and args[5] == "clean"
 	var requested_mode := int(args[6]) if args.size() > 6 else LocalStrikeMatchConfig.Mode.DEATHMATCH
+	var browser_category := args[7] if args.size() > 7 else "Bots"
 	root.size = Vector2i(width, height)
 	var scene: PackedScene = load("res://main.tscn")
 	var game = scene.instantiate()
@@ -22,7 +23,8 @@ func _capture() -> void:
 	if clean_hud:
 		game.show_buy = false
 	elif requested_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
-		game.show_buy = true
+		game.sandbox_browser.open_browser()
+		game.sandbox_browser._select_category(browser_category)
 	for frame in range(24):
 		await process_frame
 	game.hud._toast_label.visible = false

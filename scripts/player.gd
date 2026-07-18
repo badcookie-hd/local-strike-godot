@@ -12,6 +12,7 @@ signal damage_taken(amount: float)
 signal footstep(position: Vector3)
 
 const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
+const WeaponModel = preload("res://scripts/weapon_model.gd")
 const Ballistics = preload("res://scripts/ballistics_manager.gd")
 const SurfaceProfile = preload("res://scripts/surface_profile.gd")
 
@@ -43,6 +44,7 @@ var helmet := true
 var crouching := false
 var aiming := false
 var fire_mode := "auto"
+var combat_input_blocked := false
 
 var _yaw := 0.0
 var _pitch := 0.0
@@ -78,6 +80,7 @@ var _melee_anim_duration := 0.0
 var _melee_heavy := false
 var _melee_swing_sign := 1.0
 var _base_weapon_color := Color("303943")
+var _imported_weapon_model: Node3D
 var weapon_blood: Dictionary = {}
 
 func _ready() -> void:
@@ -102,6 +105,14 @@ func _build_body() -> void:
 	_camera.current = true
 	_camera.fov = 74.0
 	add_child(_camera)
+	var viewmodel_light := OmniLight3D.new()
+	viewmodel_light.position = Vector3(0.35, -0.05, -0.28)
+	viewmodel_light.light_color = Color("c7e2e4")
+	viewmodel_light.light_energy = 1.35
+	viewmodel_light.omni_range = 2.4
+	viewmodel_light.shadow_enabled = false
+	viewmodel_light.light_cull_mask = 2
+	_camera.add_child(viewmodel_light)
 
 	_weapon_root = Node3D.new()
 	_weapon_root.position = Vector3(0.34, -0.28, -0.72)
@@ -188,6 +199,7 @@ func _build_body() -> void:
 	_muzzle_light.omni_range = 4.5
 	_muzzle_light.shadow_enabled = false
 	_muzzle.add_child(_muzzle_light)
+	_set_viewmodel_layers(_weapon_root)
 
 func _create_gloved_arm(position: Vector3, rotation_z: float) -> MeshInstance3D:
 	var arm := MeshInstance3D.new()
@@ -205,6 +217,14 @@ func _create_gloved_arm(position: Vector3, rotation_z: float) -> MeshInstance3D:
 	arm.material_override = material
 	_weapon_root.add_child(arm)
 	return arm
+
+func _set_viewmodel_layers(node: Node) -> void:
+	if node is GeometryInstance3D:
+		var geometry := node as GeometryInstance3D
+		geometry.layers = 2
+		geometry.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for child in node.get_children():
+		_set_viewmodel_layers(child)
 
 func _input(event: InputEvent) -> void:
 	if not enabled:
@@ -244,29 +264,29 @@ func _physics_process(delta: float) -> void:
 		if _reload_timer <= 0.0:
 			_finish_reload()
 
-	if Input.is_action_just_pressed("reload"):
+	if not combat_input_blocked and Input.is_action_just_pressed("reload"):
 		begin_reload()
-	if Input.is_action_just_pressed("fire_mode"):
+	if not combat_input_blocked and Input.is_action_just_pressed("fire_mode"):
 		cycle_fire_mode()
-	if Input.is_action_just_pressed("select_primary") and not primary_key.is_empty():
+	if not combat_input_blocked and Input.is_action_just_pressed("select_primary") and not primary_key.is_empty():
 		equip_weapon(primary_key)
-	elif Input.is_action_just_pressed("select_secondary"):
+	elif not combat_input_blocked and Input.is_action_just_pressed("select_secondary"):
 		equip_weapon(secondary_key)
-	elif Input.is_action_just_pressed("select_melee"):
+	elif not combat_input_blocked and Input.is_action_just_pressed("select_melee"):
 		equip_weapon(melee_key)
-	elif Input.is_action_just_pressed("select_grenade") and not grenade_key.is_empty():
+	elif not combat_input_blocked and Input.is_action_just_pressed("select_grenade") and not grenade_key.is_empty():
 		equip_weapon(grenade_key)
 	var current_spec := WeaponCatalog.get_weapon(weapon_key)
 	var mouse_captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	aiming = mouse_captured and Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
+	aiming = not combat_input_blocked and mouse_captured and Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
 	if current_spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
-		if mouse_captured and Input.is_action_just_pressed("fire"):
+		if not combat_input_blocked and mouse_captured and Input.is_action_just_pressed("fire"):
 			melee_attack(false)
-		elif mouse_captured and Input.is_action_just_pressed("aim"):
+		elif not combat_input_blocked and mouse_captured and Input.is_action_just_pressed("aim"):
 			melee_attack(true)
 	else:
 		var automatic_fire := fire_mode == "auto" or fire_mode == "pump"
-		if mouse_captured and ((automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire"))):
+		if not combat_input_blocked and mouse_captured and ((automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire"))):
 			shoot()
 	if Input.is_action_just_pressed("jump"):
 		_jump_buffer_timer = JUMP_BUFFER_TIME
@@ -681,6 +701,9 @@ func set_extended_melee_enabled(value: bool) -> void:
 func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 	if _weapon_body == null:
 		return
+	if is_instance_valid(_imported_weapon_model):
+		_imported_weapon_model.queue_free()
+		_imported_weapon_model = null
 	var body_mesh := _weapon_body.mesh as BoxMesh
 	var barrel_mesh := _barrel.mesh as CylinderMesh
 	var grip_mesh := _grip.mesh as BoxMesh
@@ -774,6 +797,14 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			_sight.position = Vector3(0, 0.115, -0.16)
 	_muzzle.position = spec.muzzle_offset
 	_base_weapon_color = body_material.albedo_color
+	if WeaponModel.has_external_model(spec.key):
+		_imported_weapon_model = WeaponModel.create(spec.key, float(weapon_blood.get(spec.key, 0.0)))
+		_imported_weapon_model.position = Vector3(0, 0.01, -0.16)
+		_imported_weapon_model.scale = Vector3.ONE * 0.82
+		_weapon_root.add_child(_imported_weapon_model)
+		_set_viewmodel_layers(_imported_weapon_model)
+		for primitive in [_weapon_body, _barrel, _grip, _sight, _accent]:
+			primitive.visible = false
 	_apply_weapon_blood()
 
 func _apply_weapon_blood() -> void:
@@ -784,3 +815,14 @@ func _apply_weapon_blood() -> void:
 		return
 	var bloodiness := clampf(float(weapon_blood.get(weapon_key, 0.0)), 0.0, 1.0)
 	material.albedo_color = _base_weapon_color.lerp(Color("5a1118"), bloodiness * 0.68)
+	if WeaponModel.has_external_model(weapon_key) and is_instance_valid(_imported_weapon_model):
+		var position := _imported_weapon_model.position
+		var rotation := _imported_weapon_model.rotation
+		var scale_value := _imported_weapon_model.scale
+		_imported_weapon_model.queue_free()
+		_imported_weapon_model = WeaponModel.create(weapon_key, bloodiness)
+		_imported_weapon_model.position = position
+		_imported_weapon_model.rotation = rotation
+		_imported_weapon_model.scale = scale_value
+		_weapon_root.add_child(_imported_weapon_model)
+		_set_viewmodel_layers(_imported_weapon_model)

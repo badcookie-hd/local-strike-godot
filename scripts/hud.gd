@@ -86,7 +86,6 @@ func _build_ui() -> void:
 	add_child(_root)
 	_build_game_hud()
 	_build_buy_menu()
-	_build_sandbox_tools()
 	_build_pause_and_scoreboard()
 	_build_main_menu()
 
@@ -449,17 +448,20 @@ func _build_main_menu() -> void:
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_color_override("font_color", Color("56d8c5"))
 	box.add_child(subtitle)
-	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH", "SANDBOX CHAOS"])
+	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH", "SANDBOX - ABANDONED FOUNDRY"])
 	_mode_select.item_selected.connect(_on_mode_selected)
-	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB", "OLD QUARTER", "FROSTLINE STATION"])
+	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB", "OLD QUARTER", "FROSTLINE STATION", "ABANDONED FOUNDRY"])
 	_difficulty_select = _option(["RECRUIT BOTS", "VETERAN BOTS", "ELITE BOTS"])
 	_difficulty_select.select(1)
 	_quality_select = _option(["QUALITY: HIGH", "QUALITY: MEDIUM", "QUALITY: LOW"])
 	_quality_select.item_selected.connect(func(index: int): quality_changed.emit(index))
 	for control in [_mode_select, _map_select, _difficulty_select, _quality_select]:
 		box.add_child(control)
+	_mode_select.select(LocalStrikeMatchConfig.Mode.SANDBOX)
+	_map_select.select(5)
 	box.add_child(_menu_button("PLAY SOLO", _emit_solo))
 	_host_button = _menu_button("HOST LAN - 5v5", _emit_host)
+	_host_button.disabled = true
 	box.add_child(_host_button)
 	var server_row := HBoxContainer.new()
 	server_row.add_theme_constant_override("separation", 8)
@@ -502,6 +504,14 @@ func _emit_host() -> void:
 
 func _on_mode_selected(index: int) -> void:
 	_host_button.disabled = index == LocalStrikeMatchConfig.Mode.SANDBOX
+	if index == LocalStrikeMatchConfig.Mode.SANDBOX:
+		_map_select.select(5)
+		_map_select.disabled = true
+	elif _map_select.selected == 5:
+		_map_select.disabled = false
+		_map_select.select(0)
+	else:
+		_map_select.disabled = false
 
 func _emit_join() -> void:
 	if not _ip_input.text.strip_edges().is_empty():
@@ -542,10 +552,11 @@ func update_state(data: Dictionary) -> void:
 		for key in _buy_buttons:
 			var entry: Dictionary = _buy_buttons[key]
 			entry.button.text = "%s    %s" % [entry.name, "FREE" if free_loadout else "$%d" % int(entry.price)]
-	_sandbox_panel.visible = data.get("sandbox_visible", false)
-	_sandbox_count_label.text = "%d NPCS   %d ITEMS   %d BODIES" % [data.get("sandbox_npcs", 0), data.get("sandbox_props", 0), data.get("sandbox_bodies", 0)]
-	_sandbox_god_toggle.set_pressed_no_signal(data.get("sandbox_god", false))
-	_sandbox_slow_toggle.set_pressed_no_signal(data.get("sandbox_slow", false))
+	if _sandbox_panel != null:
+		_sandbox_panel.visible = false
+		_sandbox_count_label.text = "%d NPCS   %d ITEMS   %d BODIES" % [data.get("sandbox_npcs", 0), data.get("sandbox_props", 0), data.get("sandbox_bodies", 0)]
+		_sandbox_god_toggle.set_pressed_no_signal(data.get("sandbox_god", false))
+		_sandbox_slow_toggle.set_pressed_no_signal(data.get("sandbox_slow", false))
 	_spectator_label.visible = data.get("spectating", false)
 	_spectator_label.text = "SPECTATING  %s" % data.get("spectator_name", "ALLY")
 	_radar.update_radar(data.get("radar", {}))

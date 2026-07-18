@@ -2,6 +2,26 @@ class_name LocalStrikeWeaponModel
 extends RefCounted
 
 const Catalog = preload("res://scripts/weapon_catalog.gd")
+const Materials = preload("res://scripts/material_library.gd")
+
+const EXTERNAL_MODELS := {
+	"knife": "res://assets/models/quaternius/modular_weapons/Dagger.fbx",
+	"machete": "res://assets/models/quaternius/modular_weapons/Sword_Big.fbx",
+	"fire_axe": "res://assets/models/quaternius/modular_weapons/Axe.fbx",
+	"sledgehammer": "res://assets/models/quaternius/modular_weapons/Hammer_Double.fbx",
+	"sidearm": "res://assets/models/quaternius/ultimate_guns/Pistol_1.fbx",
+	"vanguard": "res://assets/models/quaternius/ultimate_guns/Bullpup_1.fbx",
+	"smg": "res://assets/models/quaternius/ultimate_guns/AssaultRifle2_1.fbx",
+	"whisper": "res://assets/models/quaternius/ultimate_guns/AssaultRifle2_2.fbx",
+	"ranger": "res://assets/models/quaternius/ultimate_guns/AssaultRifle_1.fbx",
+	"sentinel": "res://assets/models/quaternius/ultimate_guns/AssaultRifle_2.fbx",
+	"hammer": "res://assets/models/quaternius/ultimate_guns/AssaultRifle_3.fbx",
+	"breacher": "res://assets/models/quaternius/ultimate_guns/Bullpup_2.fbx",
+	"cyclone": "res://assets/models/quaternius/ultimate_guns/Bullpup_3.fbx",
+	"marksman": "res://assets/models/quaternius/ultimate_guns/AssaultRifle_4.fbx",
+	"heavy_sniper": "res://assets/models/quaternius/ultimate_guns/AssaultRifle2_3.fbx",
+	"bulwark": "res://assets/models/quaternius/ultimate_guns/AssaultRifle2_4.fbx"
+}
 
 static func create(weapon_key: String, bloodiness := 0.0) -> Node3D:
 	var spec := Catalog.get_weapon(weapon_key)
@@ -10,6 +30,22 @@ static func create(weapon_key: String, bloodiness := 0.0) -> Node3D:
 	var steel := _material(Color("8d999f").lerp(Color("58141a"), bloodiness * 0.68), 0.34, 0.72)
 	var dark := _material(Color("242d33").lerp(Color("4d1116"), bloodiness * 0.42), 0.62, 0.28)
 	var wood := _material(Color("71442b").lerp(Color("55151a"), bloodiness * 0.5), 0.8, 0.02)
+	if EXTERNAL_MODELS.has(weapon_key):
+		var packed := load(str(EXTERNAL_MODELS[weapon_key])) as PackedScene
+		if packed != null:
+			var pivot := Node3D.new()
+			pivot.name = "ImportedCC0Model"
+			pivot.rotation_degrees = Vector3(0, 180, 0)
+			root.add_child(pivot)
+			var imported := packed.instantiate()
+			imported.name = "SourceModel"
+			pivot.add_child(imported)
+			_fit_imported_model(imported, 0.58 if spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY else 1.08)
+			_apply_external_material(imported, weapon_key, bloodiness)
+			root.set_meta("external_model", true)
+			root.set_meta("weapon_key", weapon_key)
+			root.set_meta("bloodiness", bloodiness)
+			return root
 	match spec.category:
 		"knife":
 			_box(root, Vector3(0.06, 0.06, 0.58), Vector3(0, 0, -0.13), steel)
@@ -46,6 +82,46 @@ static func create(weapon_key: String, bloodiness := 0.0) -> Node3D:
 	root.set_meta("weapon_key", weapon_key)
 	root.set_meta("bloodiness", bloodiness)
 	return root
+
+static func has_external_model(weapon_key: String) -> bool:
+	return EXTERNAL_MODELS.has(weapon_key)
+
+static func _apply_external_material(node: Node, weapon_key: String, bloodiness: float) -> void:
+	if node is MeshInstance3D:
+		var accent_colors := [Color("7f8e92"), Color("485c62"), Color("8a6540"), Color("566c83"), Color("765d74")]
+		var tint: Color = accent_colors[absi(weapon_key.hash()) % accent_colors.size()]
+		tint = tint.lerp(Color("541117"), bloodiness * 0.62)
+		var material := Materials.create("steel_plate", tint, 1.35).duplicate() as StandardMaterial3D
+		material.roughness = 0.48
+		node.material_override = material
+	for child in node.get_children():
+		_apply_external_material(child, weapon_key, bloodiness)
+
+static func _fit_imported_model(imported: Node3D, target_extent: float) -> void:
+	var state := {"has_bounds": false, "bounds": AABB()}
+	_collect_bounds(imported, imported, Transform3D.IDENTITY, state)
+	if not bool(state.has_bounds):
+		return
+	var bounds: AABB = state.bounds
+	var longest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+	if longest <= 0.001:
+		return
+	var factor := target_extent / longest
+	imported.scale *= factor
+	imported.position = -bounds.get_center() * factor
+
+static func _collect_bounds(root: Node3D, node: Node, parent_transform: Transform3D, state: Dictionary) -> void:
+	var relative := parent_transform
+	if node is Node3D and node != root:
+		relative = parent_transform * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh != null:
+			var mesh_bounds: AABB = relative * mesh_instance.get_aabb()
+			state.bounds = state.bounds.merge(mesh_bounds) if bool(state.has_bounds) else mesh_bounds
+			state.has_bounds = true
+	for child in node.get_children():
+		_collect_bounds(root, child, relative, state)
 
 static func collision_size(weapon_key: String) -> Vector3:
 	var spec := Catalog.get_weapon(weapon_key)

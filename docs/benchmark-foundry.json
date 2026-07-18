@@ -1,0 +1,13 @@
+{
+  "actors": 11,
+  "average_fps": 139.5,
+  "bots": 10,
+  "duration_seconds": 120.0,
+  "map": "ABANDONED FOUNDRY",
+  "minimum_sample_fps": 132.0,
+  "physics_props": 13,
+  "profile": "HIGH",
+  "resolution": "1920x1080",
+  "sample_count": 474,
+  "samples_below_55": 0
+}

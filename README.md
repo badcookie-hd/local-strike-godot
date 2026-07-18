@@ -1,98 +1,80 @@
 # Local Strike Godot
 
-Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt Solo-Bots, LAN-Grundfunktionen, Defusal und Team Deathmatch. Es verwendet keine Counter-Strike-Assets oder geschuetzten Namen.
+Ein eigenstaendiger taktischer Shooter und lokaler Physik-Sandbox-Modus fuer Godot 4.7. Sandbox startet standardmaessig in der neuen Karte **Abandoned Foundry**; Defusal, Team Deathmatch, Solo-Bots und LAN bleiben spielbar. Das Projekt verwendet keine Counter-Strike- oder Paint-the-Town-Red-Assets.
 
-![Local Strike auf der Karte Old Quarter](docs/old-quarter.png)
+![Abandoned Foundry in Forward+](docs/foundry-gameplay-1080p.png)
 
 ## Start
 
-- Godot 4.7 installieren und das Projekt importieren. Alternativ die portablen Windows-Dateien in `engine/` ablegen.
-- `START_GAME.cmd` startet Forward+ mit Vulkan und wechselt bei einem Startfehler automatisch zu OpenGL. Es findet Godot im Projekt oder ueber `PATH`.
-- `START_GAME_COMPATIBILITY.cmd` erzwingt den sparsamen OpenGL-Modus.
-- `OPEN_EDITOR.cmd` oeffnet das Projekt im Godot-Editor.
-- `RUN_TESTS.cmd` prueft 22 Ausruestungsobjekte, raeumlichen Nahkampf, Ballistik, fuenf Karten, konfigurierbare Sandbox-Spawns, Movement, Interaktionen, Blut- und Effektlimits, Deathmatch und LAN-Sockets.
+1. `START_GAME.cmd` startet Forward+ mit Vulkan und faellt bei einem Startfehler automatisch auf OpenGL zurueck.
+2. `START_GAME_COMPATIBILITY.cmd` erzwingt den reduzierten OpenGL-Modus.
+3. `OPEN_EDITOR.cmd` oeffnet das Projekt in Godot 4.7.
+4. `RUN_TESTS.cmd` startet Gameplay-, Sandbox-Grenz- und LAN-Socket-Tests.
 
-Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des Repositories. Details stehen in `engine/README.md`.
+Godot kann ueber `PATH` gefunden oder portabel in `engine/` abgelegt werden. Die EXE selbst ist wegen GitHubs 100-MB-Dateigrenze nicht im Repository; Details stehen in `engine/README.md`.
 
-## Spielmodi
+## Foundry Sandbox
 
-- Defusal: Best of 7, Seitenwechsel nach drei Runden, 12 Sekunden Kaufphase, 105 Sekunden Rundenzeit und 35 Sekunden Charge-Timer.
-- Team Deathmatch: acht Minuten oder 40 Kills, freie Ausruestung und Respawns nach drei Sekunden.
-- Sandbox: lokaler Endlosmodus mit freier Ausruestung, unendlicher Munition, optionalem God Mode sowie exakt konfigurierbaren Bots, Waffen, Physikobjekten, Explosionen und Brawl-Waves.
-- Solo fuellt beide Teams bis 5v5 mit Bots auf.
-- LAN verwendet ENet auf UDP-Port `27888`; lokale Server werden ueber UDP-Port `27889` gefunden. Direkte IP ist ebenfalls moeglich.
+![Spawn-Browser mit echten Waffenmodellen](docs/foundry-browser-1080p.png)
 
-## Ausstattung
+Abandoned Foundry ist eine eigene Szene mit Haupthalle, Schmelzofen, Werkstatt, Kontrollraum, Ladezone, Wartungswegen und begehbaren Laufstegen. Sie nutzt zwoelf lokale PBR-Materialsets, statische Kollision, Occluder, Navigation, Reflexionsproben, volumetrisches Licht und einen OpenGL-Fallback.
 
-- 22 Ausruestungsobjekte: zwoelf Schusswaffen, sechs Nahkampfwaffen und vier Granatentypen
-- Combat Knife, Machete, Baseball Bat, Crowbar, Fire Axe und Sledgehammer mit eigenen Reichweiten, Trefferboegen, leichten und schweren Angriffen
-- Frag-, Rauch-, Flash- und Brandgranaten mit Sprungphysik, Sichtlinien und Flaechenschaden
-- Fuenf Karten: Harbor Yard, Train Depot, Solar Lab, Old Quarter und Frostline Station
-- Kopf-, Torso- und Gliedmassen-Trefferzonen
-- Deterministische Rueckstossmuster, ADS, Feuerwahl, Schadensabfall, bis zu drei Durchdringungen und ein Abpraller
-- Bewegliche Kisten und Frachtobjekte, zerstoerbare Deckung, Explosionsimpulse, Waffen-Drops und kosmetische Ragdolls
-- Bodenreibung, Eisflaechen, Luftkontrolle, Fallschaden, sicheres Ducken und automatisches Uebersteigen niedriger Deckung
-- Humanoide Scout-, Assault- und Heavy-Bots mit Sicht, Geraeuschsuche, Teamzielen und drei Schwierigkeitsstufen
-- Schiebetueren mit Blockierschutz, zerbrechliches Glas, ausschaltbare Lampen und explodierende Brennstoffbehaelter
+Der sichtbare Button unten links oder `B` oeffnet den Spawn-Browser. Die sechs Tabs `Bots`, `Weapons`, `Melee`, `Grenades`, `Props` und `World` besitzen Suche, echte 3D-Vorschauen und eine Schnellleiste fuer zuletzt verwendete Objekte.
 
-## Sandbox
+- Bots: Team, Scout/Assault/Heavy, beliebige Bot-Waffe, Aggressiv/Wache/Passiv und Formation von 1 bis 10
+- Waffen: alle 22 Ausruestungsobjekte direkt ausruesten oder als aufhebbare Worldmodels platzieren
+- Props: Holzkisten, Metallkisten, Brennstofffaesser und Werkzeugwagen mit echter RigidBody3D-Physik
+- Welt: God Mode, Zeitlupe, Explosion, Ziel entfernen, Kategorien leeren und kompletter Reset
+- Limits: 40 Bots, 64 eigene Physikprops, 32 liegende Waffen und 24 persistente Koerper
 
-![Sandbox-Werkzeuge auf Old Quarter](docs/sandbox-720p.png)
+Beim Platzieren zeigt eine komplette, drehbare Vorschau die Formation. Gruen ist gueltig, Rot blockiert. Linksklick bestaetigt, Rechtsklick bricht ab und das Mausrad dreht.
 
-![Sandbox-Werkzeugkasten in Forward+ bei 1080p](docs/sandbox-1080p.png)
+## Waffen und Effekte
 
-Sandbox wird im Hauptmenue als dritter Modus gestartet und laeuft bewusst lokal. Das Werkzeugpanel und die freie Ausruestung werden mit `B` geoeffnet. Die Tabs `BOTS`, `WEAPONS` und `WORLD` erlauben die genaue Auswahl von Team, Bot-Typ, Waffe, Verhalten und Anzahl. Waffen koennen direkt ausgeruestet oder am anvisierten Punkt abgelegt werden. Blut, Koerper, NPCs und Waffen lassen sich getrennt entfernen; `RESET WORLD` stellt die Karte vollstaendig wieder her.
+- Zwoelf Schusswaffen, sechs Nahkampfwaffen und vier Granaten
+- ADS, Feuerwahl, reproduzierbare Rueckstossmuster, Distanzabfall, Ruestungsdurchdringung, bis zu drei Materialdurchdringungen und ein Abpraller
+- Messer, Machete, Baseball Bat, Crowbar, Fire Axe und Sledgehammer mit getrennten leichten/schweren Angriffen, Trefferboegen und Impulsen
+- Aufhebbare und fallengelassene Waffen behalten Magazin und Blutverfaerbung
+- Frag, Rauch, Flash und Brandgranate mit Bounce, Sichtlinien und physikalischen Impulsen
+- Gerichtete Blutspritzer, wachsende Lachen, persistente Sandbox-Ragdolls und Qualitaetslimits ohne Zerstueckelung
 
-Nahkampftreffer verwenden einen raeumlichen Bogen mit Hindernispruefung und Physikimpulsen. Blutige Nahkampfwaffen behalten ihre Verfaerbung beim Fallenlassen und Aufheben. Im Sandbox-Modus bleiben Blutspritzer, Blutlachen und bis zu 24 Ragdolls erhalten, bis sie gereinigt oder wegen eines Effektlimits recycelt werden. Es gibt keine Zerstueckelung.
+Zwoelf Feuerwaffen sowie Messer, Machete, Axt und Hammer verwenden lokale Quaternius-CC0-Modelle. Baseball Bat, Crowbar und Granaten besitzen getrennte Godot-native Modelle. Bots verwenden drei riggte Quaternius-Charaktere mit Lauf-, Schuss-, Nahkampf- und Todesanimationen.
 
-## Grafik und Audio
+## Weitere Modi
 
-- Forward+ mit 4x MSAA, SSAO, SSIL, SSR, Glow, volumetrischem Nebel und 4096er Schatten im Profil Hoch
-- Qualitaetsprofile Hoch, Mittel und Niedrig
-- Korrekt verwendete CC0-ARM/ORM-PBR-Materialien fuer Beton und Metall sowie prozedurale Normaldetails
-- Eigene Geometrie fuer Container, Pfuetzen, Flutlichter, Hafenkran, Gleise, Signale, Zuege, Solarpanels und Laborkern
-- Humanoide Figuren mit animierten Armen und Beinen sowie unterschiedliche Viewmodels fuer alle Waffenkategorien
-- Oberflaechenspezifische Funken, Staub, Glassplitter, Blutnebel, Tracer, Decals, Explosionen und dichter Rauch
-- Raeumliche Kenney-CC0-Schritt-, Metall-, Glas- und Einschlagsounds; Schuesse und Explosionen besitzen einen prozeduralen Fallback
+- Defusal: Best of 7, Seitenwechsel nach drei Runden, 12 Sekunden Kaufphase, 105 Sekunden Runde und 35 Sekunden Charge-Timer
+- Team Deathmatch: acht Minuten oder 40 Kills, freie Ausruestung und Respawn nach drei Sekunden
+- Fuenf kompetitive Karten: Harbor Yard, Train Depot, Solar Lab, Old Quarter und Frostline Station
+- LAN: ENet auf UDP `27888`, lokale Suche auf UDP `27889`, direkte IP als Fallback
 
-Die CC0-Herkunft ist in `ASSET_LICENSES.md` dokumentiert.
+Sandbox bleibt bewusst lokal. LAN-Schaden und Nahkampftreffer in den kompetitiven Modi bleiben host-autoritativ.
 
-## Leistung
+## Grafik und Assets
 
-Der aktuelle Physik-Build erreichte auf einer RTX 3070 bei 1920x1080, Profil Hoch und zehn aktiven Figuren in einer 50-Sekunden-Forward+-Messung durchschnittlich 144 FPS; keines der 200 Samples lag unter 55 FPS. Das maschinenlesbare Ergebnis liegt in `docs/benchmark-physics.json`, der Runner kann mit einer beliebigen Dauer erneut gestartet werden.
+- Forward+ Hoch: 4x MSAA, SSAO, SSIL, Reflexionen, Glow, volumetrischer Nebel und hochwertige Schatten
+- Profile Hoch, Mittel und Niedrig; OpenGL reduziert nur kosmetische Effekte und Lichter
+- Zwoelf 1K/2K-Poly-Haven-PBR-Sets mit Albedo, OpenGL-Normalmap und ARM/ORM-Daten
+- CC0-Waffen und Figuren von Quaternius sowie Kenney-Impact-Sounds
+- Alle Quellen, Autoren, URLs und lokalen Pfade stehen in `ASSET_LICENSES.md`
 
 ## Steuerung
 
-- `WASD`: bewegen
-- Maus: zielen
-- Linksklick: schiessen oder Granate werfen
-- `Leertaste`: springen
-- `Strg`: ducken
-- `Shift`: sprinten
-- `R`: nachladen
-- Rechtsklick: ADS / Zielfernrohr; mit Nahkampfwaffen schwerer Angriff
-- `V`: Feuerart bei Sentinel und Hammer wechseln
-- `G`: nahe Waffe aufnehmen oder aktuelle Schuss- beziehungsweise Sandbox-Nahkampfwaffe fallenlassen
-- `1`: Primaerwaffe
-- `2`: Sidearm
-- `3`: zuletzt ausgewaehlte Nahkampfwaffe
-- `4`: Granate
-- `E`: Charge setzen, entschaerfen oder nahe Tuer bedienen
-- `B`: Ausruestungsmenue
-- `F5`: Sandbox-Gegner mit dem aktuellen Bot-Preset platzieren
-- `F6`: Sandbox-Verbuendeten mit dem aktuellen Bot-Preset platzieren
-- `F7`: Sandbox-Holzkiste platzieren
-- `F8`: Sandbox-Explosion am Zielpunkt
-- `F9`: Sandbox-Zeitlupe
-- `F10`: Sandbox-Spawns entfernen
-- `M`: im Sandbox-Modus zur naechsten Karte wechseln
-- `Tab`: Scoreboard
-- `Escape` oder `P`: Pause
-- `F2`: Match neu starten
+| Eingabe | Aktion |
+| --- | --- |
+| `WASD`, Maus | Bewegen und zielen |
+| `Leertaste`, `Strg`, `Shift` | Springen, ducken, sprinten |
+| Linksklick | Schiessen, werfen oder leichter Nahkampfangriff |
+| Rechtsklick | ADS/Zielfernrohr oder schwerer Nahkampfangriff |
+| `R`, `V` | Nachladen, Feuerart wechseln |
+| `G` | Nahe Waffe aufnehmen oder aktuelle Waffe fallenlassen |
+| `1` bis `4` | Primaerwaffe, Sidearm, Nahkampf, Granate |
+| `E` | Interagieren, pflanzen oder entschaerfen |
+| `B` | Spawn-Browser beziehungsweise Kaufmenue |
+| Linksklick / Rechtsklick / Mausrad | Platzieren / abbrechen / Vorschau drehen |
+| `Tab`, `Escape`, `F2` | Scoreboard, Pause, Match neu starten |
 
-## LAN
+## Abnahme
 
-1. Auf einem Rechner im Hauptmenue `HOST LAN - 5v5` waehlen.
-2. Auf weiteren Rechnern `REFRESH LAN` verwenden und den Server doppelklicken.
-3. Falls Broadcast durch das Netzwerk blockiert wird, die lokale IPv4-Adresse direkt eingeben.
-4. Bei einer Windows-Firewallabfrage den privaten Netzwerken Zugriff auf UDP `27888` und `27889` erlauben.
+`RUN_TESTS.cmd` prueft Parser und Laufzeit, alle 22 Ausruestungen, PBR-Dateien, Browser-Suche und Aktionen, exakte Bot-Konfiguration, Platzierung, Nahkampf, Effekte, 40/64/32-Objektgrenzen, Defusal, Deathmatch und LAN-Sockets.
+
+Der 120-Sekunden-Benchmark auf einer RTX 3070 erreichte in Abandoned Foundry bei 1920x1080, Profil Hoch, zehn Bots und 13 Physikobjekten durchschnittlich **139,5 FPS**. Das Minimum-Sample lag bei **132 FPS**, keines der 474 Samples unter 55 FPS. Ergebnis: `docs/benchmark-foundry.json`.
