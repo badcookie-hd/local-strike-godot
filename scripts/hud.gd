@@ -7,6 +7,7 @@ signal join_requested(address: String)
 signal refresh_servers_requested
 signal buy_requested(key: String)
 signal quality_changed(index: int)
+signal sandbox_action_requested(action: String, value: bool)
 
 const RadarScript = preload("res://scripts/radar.gd")
 
@@ -43,6 +44,13 @@ var _spectator_label: Label
 var _damage_flash: ColorRect
 var _flash_overlay: ColorRect
 var _weapon_status_label: Label
+var _sandbox_panel: PanelContainer
+var _sandbox_count_label: Label
+var _sandbox_god_toggle: CheckButton
+var _sandbox_slow_toggle: CheckButton
+var _host_button: Button
+var _buy_buttons: Dictionary = {}
+var _free_loadout_state := false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -69,6 +77,7 @@ func _build_ui() -> void:
 	add_child(_root)
 	_build_game_hud()
 	_build_buy_menu()
+	_build_sandbox_tools()
 	_build_pause_and_scoreboard()
 	_build_main_menu()
 
@@ -201,6 +210,72 @@ func _build_buy_menu() -> void:
 		var key: String = entry[0]
 		button.pressed.connect(func(): buy_requested.emit(key))
 		box.add_child(button)
+		_buy_buttons[key] = {"button": button, "name": entry[1], "price": entry[2]}
+
+func _build_sandbox_tools() -> void:
+	_sandbox_panel = PanelContainer.new()
+	_sandbox_panel.anchor_left = 1.0
+	_sandbox_panel.anchor_right = 1.0
+	_sandbox_panel.anchor_bottom = 1.0
+	_sandbox_panel.offset_left = -286
+	_sandbox_panel.offset_top = 278
+	_sandbox_panel.offset_right = -18
+	_sandbox_panel.offset_bottom = -102
+	_root.add_child(_sandbox_panel)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_sandbox_panel.add_child(scroll)
+	var margin := MarginContainer.new()
+	margin.custom_minimum_size.x = 246
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	scroll.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	margin.add_child(box)
+	var title := Label.new()
+	title.text = "SANDBOX TOOLS"
+	title.add_theme_font_size_override("font_size", 17)
+	box.add_child(title)
+	_sandbox_count_label = Label.new()
+	_sandbox_count_label.add_theme_font_size_override("font_size", 12)
+	_sandbox_count_label.add_theme_color_override("font_color", Color("9fb0b9"))
+	box.add_child(_sandbox_count_label)
+	box.add_child(_sandbox_tool_row([["SPAWN ENEMY", "spawn_enemy"], ["SPAWN ALLY", "spawn_ally"]]))
+	box.add_child(_sandbox_tool_button("SPAWN BRAWL WAVE", "spawn_wave"))
+	box.add_child(_sandbox_tool_row([["WOOD CRATE", "spawn_wood"], ["METAL PROP", "spawn_metal"]]))
+	box.add_child(_sandbox_tool_button("DROP RANDOM WEAPON", "spawn_weapon"))
+	box.add_child(_sandbox_tool_button("FORCE BLAST", "explosion"))
+	_sandbox_god_toggle = CheckButton.new()
+	_sandbox_god_toggle.text = "GOD MODE"
+	_sandbox_god_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("god_mode", value))
+	box.add_child(_sandbox_god_toggle)
+	_sandbox_slow_toggle = CheckButton.new()
+	_sandbox_slow_toggle.text = "SLOW MOTION"
+	_sandbox_slow_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("slow_motion", value))
+	box.add_child(_sandbox_slow_toggle)
+	box.add_child(_sandbox_tool_button("CLEAR SPAWNED", "clear"))
+	box.add_child(_sandbox_tool_button("RESET WORLD", "reset"))
+	_sandbox_panel.visible = false
+
+func _sandbox_tool_row(entries: Array) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	for entry in entries:
+		var button := _sandbox_tool_button(str(entry[0]), str(entry[1]))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(button)
+	return row
+
+func _sandbox_tool_button(label: String, action: String) -> Button:
+	var button := Button.new()
+	button.text = label
+	button.custom_minimum_size.y = 36
+	button.pressed.connect(func(): sandbox_action_requested.emit(action, true))
+	return button
 
 func _build_pause_and_scoreboard() -> void:
 	_pause_panel = _center_panel(Vector2(420, 180))
@@ -251,7 +326,8 @@ func _build_main_menu() -> void:
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_color_override("font_color", Color("56d8c5"))
 	box.add_child(subtitle)
-	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH"])
+	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH", "SANDBOX CHAOS"])
+	_mode_select.item_selected.connect(_on_mode_selected)
 	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB", "OLD QUARTER", "FROSTLINE STATION"])
 	_difficulty_select = _option(["RECRUIT BOTS", "VETERAN BOTS", "ELITE BOTS"])
 	_difficulty_select.select(1)
@@ -260,7 +336,8 @@ func _build_main_menu() -> void:
 	for control in [_mode_select, _map_select, _difficulty_select, _quality_select]:
 		box.add_child(control)
 	box.add_child(_menu_button("PLAY SOLO", _emit_solo))
-	box.add_child(_menu_button("HOST LAN - 5v5", _emit_host))
+	_host_button = _menu_button("HOST LAN - 5v5", _emit_host)
+	box.add_child(_host_button)
 	var server_row := HBoxContainer.new()
 	server_row.add_theme_constant_override("separation", 8)
 	box.add_child(server_row)
@@ -300,6 +377,9 @@ func _emit_solo() -> void:
 func _emit_host() -> void:
 	host_requested.emit(_mode_select.selected, _map_select.selected, _difficulty_select.selected)
 
+func _on_mode_selected(index: int) -> void:
+	_host_button.disabled = index == LocalStrikeMatchConfig.Mode.SANDBOX
+
 func _emit_join() -> void:
 	if not _ip_input.text.strip_edges().is_empty():
 		join_requested.emit(_ip_input.text.strip_edges())
@@ -325,7 +405,7 @@ func update_state(data: Dictionary) -> void:
 	_phase_label.text = data.phase
 	_timer_label.text = data.time
 	_score_label.text = "%d : %d" % [data.attack_score, data.defense_score]
-	_money_label.text = "$%d" % data.money
+	_money_label.text = data.get("money_text", "$%d" % data.money)
 	_health_label.text = "HP %d    ARMOR %d" % [ceili(data.health), ceili(data.armor)]
 	_weapon_label.text = data.weapon
 	_ammo_label.text = data.ammo
@@ -333,6 +413,16 @@ func update_state(data: Dictionary) -> void:
 	_charge_label.text = data.charge
 	_stamina_bar.value = data.stamina
 	_buy_panel.visible = data.buy_visible
+	var free_loadout: bool = data.get("free_loadout", false)
+	if free_loadout != _free_loadout_state:
+		_free_loadout_state = free_loadout
+		for key in _buy_buttons:
+			var entry: Dictionary = _buy_buttons[key]
+			entry.button.text = "%s    %s" % [entry.name, "FREE" if free_loadout else "$%d" % int(entry.price)]
+	_sandbox_panel.visible = data.get("sandbox_visible", false)
+	_sandbox_count_label.text = "%d NPCS   %d PROPS" % [data.get("sandbox_npcs", 0), data.get("sandbox_props", 0)]
+	_sandbox_god_toggle.set_pressed_no_signal(data.get("sandbox_god", false))
+	_sandbox_slow_toggle.set_pressed_no_signal(data.get("sandbox_slow", false))
 	_spectator_label.visible = data.get("spectating", false)
 	_spectator_label.text = "SPECTATING  %s" % data.get("spectator_name", "ALLY")
 	_radar.update_radar(data.get("radar", {}))

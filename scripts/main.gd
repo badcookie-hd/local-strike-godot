@@ -78,6 +78,9 @@ var match_over := false
 var peer_shot_state: Dictionary = {}
 var prop_sync_timer := 0.0
 var next_drop_id := 1
+var sandbox_god_mode := true
+var sandbox_slow_motion := false
+var sandbox_spawn_serial := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -118,6 +121,7 @@ func _ready() -> void:
 	hud.refresh_servers_requested.connect(_refresh_servers)
 	hud.buy_requested.connect(_buy_weapon)
 	hud.quality_changed.connect(_apply_quality)
+	hud.sandbox_action_requested.connect(_on_sandbox_action)
 	add_child(hud)
 	NetworkManager.server_discovered.connect(hud.show_server)
 	NetworkManager.connection_state_changed.connect(_on_connection_state_changed)
@@ -149,10 +153,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_weapon_pickup_or_drop()
 	if event.is_action_pressed("toggle_buy"):
 		show_buy = not show_buy
-	if phase == Phase.BUY and event.is_action_pressed("map_next"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if show_buy else Input.MOUSE_MODE_CAPTURED
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		if event.is_action_pressed("sandbox_enemy"):
+			_on_sandbox_action("spawn_enemy", true)
+		elif event.is_action_pressed("sandbox_ally"):
+			_on_sandbox_action("spawn_ally", true)
+		elif event.is_action_pressed("sandbox_prop"):
+			_on_sandbox_action("spawn_wood", true)
+		elif event.is_action_pressed("sandbox_blast"):
+			_on_sandbox_action("explosion", true)
+		elif event.is_action_pressed("sandbox_slow"):
+			_on_sandbox_action("slow_motion", not sandbox_slow_motion)
+		elif event.is_action_pressed("sandbox_clear"):
+			_on_sandbox_action("clear", true)
+	if (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.SANDBOX) and event.is_action_pressed("map_next"):
 		level_index = (level_index + 1) % levels.size()
-		_load_level(level_index)
-		_spawn_teams()
+		if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+			_reset_round(false)
+		else:
+			_load_level(level_index)
+			_spawn_teams()
 		hud.show_toast("Map: %s" % current_level.map_name)
 	if phase == Phase.BUY and event.is_action_pressed("weapon_1"):
 		_buy_weapon("sidearm")
@@ -171,6 +192,10 @@ func _physics_process(delta: float) -> void:
 	_update_spectator()
 	if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
 		_update_deathmatch(delta)
+		_update_hud()
+		return
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		_update_sandbox(delta)
 		_update_hud()
 		return
 
@@ -212,6 +237,9 @@ func _start_solo(mode: int, map_index: int, difficulty: int) -> void:
 	_start_configured_match(config)
 
 func _start_host(mode: int, map_index: int, difficulty: int) -> void:
+	if mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		hud.show_toast("Sandbox is available in local solo play", 3.5)
+		return
 	var config := LocalStrikeMatchConfig.new()
 	config.mode = mode
 	config.map_index = map_index
@@ -239,6 +267,7 @@ func _refresh_servers() -> void:
 	hud.show_toast("Searching local network..." if error == OK else "LAN discovery unavailable", 2.5)
 
 func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
+	Engine.time_scale = 1.0
 	game_mode = config.mode
 	level_index = clampi(config.map_index, 0, levels.size() - 1)
 	bot_difficulty = config.bot_difficulty
@@ -246,21 +275,28 @@ func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	defense_score = 0
 	round_no = 0
 	deathmatch_timer = 480.0
-	player.money = 800
+	player.money = 99999 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else 800
 	player.authoritative_damage = not _is_network_client()
+	player.invulnerable = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
+	player.unlimited_ammo = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
+	sandbox_god_mode = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
+	sandbox_slow_motion = false
 	player_dead = false
 	match_over = false
 	started = true
 	hud.set_deployed(true)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_reset_round(false)
-	hud.show_toast("%s - %s" % ["DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else "TEAM DEATHMATCH", current_level.map_name], 3.2)
+	var mode_name := "DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else ("TEAM DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else "SANDBOX")
+	hud.show_toast("%s - %s" % [mode_name, current_level.map_name], 3.2)
 
 func _restart_match() -> void:
+	Engine.time_scale = 1.0
+	sandbox_slow_motion = false
 	attack_score = 0
 	defense_score = 0
 	round_no = 0
-	player.money = 800
+	player.money = 99999 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else 800
 	player.equip_weapon("sidearm", false)
 	_set_paused(false)
 	started = true
@@ -277,9 +313,9 @@ func _set_paused(value: bool) -> void:
 
 func _reset_round(show_message: bool) -> void:
 	round_no += 1
-	player_team = 0 if round_no <= 3 or game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else 1
-	phase = Phase.LIVE if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else Phase.BUY
-	show_buy = true
+	player_team = 0 if round_no <= 3 or game_mode != LocalStrikeMatchConfig.Mode.DEFUSAL else 1
+	phase = Phase.LIVE if game_mode != LocalStrikeMatchConfig.Mode.DEFUSAL else Phase.BUY
+	show_buy = false if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else true
 	phase_timer = 105.0
 	freeze_timer = 12.0
 	round_end_timer = 0.0
@@ -291,6 +327,8 @@ func _reset_round(show_message: bool) -> void:
 	_load_level(level_index)
 	var spawn_position: Vector3 = current_level.player_spawn if player_team == 0 else current_level.bot_spawns[0]
 	player.reset_for_round(spawn_position)
+	player.invulnerable = sandbox_god_mode if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else false
+	player.unlimited_ammo = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
 	player.enabled = started
 	player.set_view_active(true)
 	spectator_camera.current = false
@@ -342,6 +380,12 @@ func _spawn_teams() -> void:
 			ally.queue_free()
 	allies.clear()
 	if _is_network_client():
+		return
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		for i in range(3):
+			var bot := _spawn_bot(1, i, current_level.bot_spawns[i % current_level.bot_spawns.size()])
+			enemies.append(bot)
+		_refresh_bot_opponents()
 		return
 	var human_players := 1 + multiplayer.get_peers().size() if NetworkManager.peer != null else 1
 	var ally_count := maxi(0, 5 - human_players)
@@ -467,6 +511,7 @@ func _end_round(attack_wins: bool, reason: String) -> void:
 	hud.show_toast("%s wins: %s" % ["ATTACK" if attack_wins else "DEFENSE", reason], 3.2)
 
 func _finish_match() -> void:
+	Engine.time_scale = 1.0
 	started = false
 	player.enabled = false
 	hud.set_deployed(false)
@@ -474,7 +519,7 @@ func _finish_match() -> void:
 	hud.show_toast("MATCH COMPLETE  %d : %d" % [attack_score, defense_score], 5.0)
 
 func _buy_weapon(key: String) -> void:
-	var message := player.grant_weapon(key) if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else player.try_buy(key, phase == Phase.BUY)
+	var message := player.grant_weapon(key) if game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX] else player.try_buy(key, phase == Phase.BUY)
 	hud.show_toast(message)
 
 func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String) -> void:
@@ -491,6 +536,13 @@ func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: Stri
 		player.add_reward(reward)
 	_create_burst(position + Vector3.UP, Color("f3b447"), 12)
 	hud.add_kill("OPERATOR" if was_opponent else "DEFENDER", "DEFENDER" if was_opponent else "ALLY", player.get_weapon_name())
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		if was_opponent:
+			attack_score += 1
+		else:
+			defense_score += 1
+		_refresh_bot_opponents()
+		return
 	if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
 		if enemy.team == 1:
 			attack_score += 1
@@ -509,7 +561,9 @@ func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: Stri
 func _on_player_died() -> void:
 	player_dead = true
 	player.enabled = false
-	if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
+	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		player_respawn_timer = 1.5
+	elif game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
 		player_respawn_timer = 3.0
 		if player_team == 0:
 			defense_score += 1
@@ -597,6 +651,159 @@ func _update_deathmatch(delta: float) -> void:
 		if pending_respawns[i].time <= 0.0:
 			_respawn_bot(pending_respawns[i])
 			pending_respawns.remove_at(i)
+
+func _update_sandbox(delta: float) -> void:
+	phase = Phase.LIVE
+	phase_timer = 0.0
+	if player_dead:
+		player_respawn_timer -= delta
+		if player_respawn_timer <= 0.0:
+			_respawn_player()
+			player.invulnerable = sandbox_god_mode
+			player.unlimited_ammo = true
+
+func _on_sandbox_action(action: String, value: bool) -> void:
+	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX or not started:
+		return
+	match action:
+		"god_mode":
+			sandbox_god_mode = value
+			player.invulnerable = value
+			if value:
+				player.health = 100.0
+				player.armor = 100.0
+			hud.show_toast("God mode %s" % ["enabled" if value else "disabled"], 1.4)
+		"slow_motion":
+			sandbox_slow_motion = value
+			Engine.time_scale = 0.32 if value else 1.0
+			hud.show_toast("Slow motion %s" % ["enabled" if value else "disabled"], 1.4)
+		"spawn_enemy":
+			_spawn_sandbox_bot(1)
+		"spawn_ally":
+			_spawn_sandbox_bot(0)
+		"spawn_wave":
+			_spawn_sandbox_wave()
+		"spawn_wood":
+			_spawn_sandbox_prop("wood")
+		"spawn_metal":
+			_spawn_sandbox_prop("metal")
+		"spawn_weapon":
+			_spawn_sandbox_weapon()
+		"explosion":
+			var blast_position := _sandbox_target_position(0.2)
+			_create_burst(blast_position + Vector3.UP * 0.3, Color("ff8a38"), 38)
+			if DisplayServer.get_name() != "headless":
+				AudioManager.play_explosion(blast_position)
+			_apply_radial_damage(blast_position, 82.0, 6.0)
+		"clear":
+			_clear_sandbox_spawns()
+		"reset":
+			_restart_match()
+
+func _spawn_sandbox_bot(team: int) -> void:
+	if enemies.size() + allies.size() >= 40:
+		hud.show_toast("NPC limit reached", 1.3)
+		return
+	sandbox_spawn_serial += 1
+	var position := _sandbox_target_position(0.05)
+	var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position)
+	if team == player_team:
+		allies.append(bot)
+	else:
+		enemies.append(bot)
+	_refresh_bot_opponents()
+	hud.show_toast("Ally spawned" if team == player_team else "Enemy spawned", 1.1)
+
+func _spawn_sandbox_wave() -> void:
+	var center := _sandbox_target_position(0.05)
+	var available := mini(8, 40 - enemies.size() - allies.size())
+	if available <= 0:
+		hud.show_toast("NPC limit reached", 1.3)
+		return
+	for index in range(available):
+		sandbox_spawn_serial += 1
+		var angle := TAU * float(index) / 8.0
+		var radius := 2.0 + float(index % 2) * 1.2
+		var position := center + Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		position.x = clampf(position.x, -15.0, 15.0)
+		position.z = clampf(position.z, -15.0, 15.0)
+		var team := 0 if index >= 6 else 1
+		var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position)
+		if team == player_team:
+			allies.append(bot)
+		else:
+			enemies.append(bot)
+	_refresh_bot_opponents()
+	hud.show_toast("Brawl wave spawned", 1.4)
+
+func _spawn_sandbox_prop(surface_type: String) -> void:
+	if physics_props.size() >= 64:
+		hud.show_toast("Physics prop limit reached", 1.3)
+		return
+	sandbox_spawn_serial += 1
+	var prop_id := "sandbox_prop_%d" % sandbox_spawn_serial
+	var size := Vector3(1.15, 1.15, 1.15) if surface_type == "wood" else Vector3(1.5, 0.8, 0.85)
+	var data := _physics_prop(prop_id, _sandbox_target_position(size.y * 0.5), size, surface_type, 18.0 if surface_type == "wood" else 38.0, 55.0 if surface_type == "wood" else 95.0)
+	var prop = PhysicsPropScript.new()
+	prop.configure(data)
+	prop.position = data.position
+	prop.state_changed.connect(_on_physics_prop_state_changed)
+	prop.destroyed.connect(_on_physics_prop_destroyed)
+	level_root.add_child(prop)
+	physics_props[prop_id] = prop
+	hud.show_toast("%s prop spawned" % surface_type.capitalize(), 1.1)
+
+func _spawn_sandbox_weapon() -> void:
+	if dropped_weapons.size() >= 32:
+		hud.show_toast("Weapon drop limit reached", 1.3)
+		return
+	var keys := WeaponCatalog.primary_keys()
+	var key: String = keys[randi() % keys.size()]
+	var spec := WeaponCatalog.get_weapon(key)
+	_spawn_dropped_weapon(key, spec.magazine, spec.reserve, _sandbox_target_position(0.35), Vector3.UP * 0.5)
+	hud.show_toast("%s dropped" % spec.display_name, 1.1)
+
+func _sandbox_target_position(height_offset: float) -> Vector3:
+	var origin := player.get_aim_origin()
+	var direction := player.get_aim_direction().normalized()
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * 14.0)
+	query.exclude = [player.get_rid()]
+	query.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var target: Vector3 = hit.position + hit.normal * 0.35 if not hit.is_empty() else origin + direction * 7.0
+	var floor_query := PhysicsRayQueryParameters3D.create(target + Vector3.UP * 5.0, target + Vector3.DOWN * 10.0)
+	floor_query.exclude = [player.get_rid()]
+	floor_query.collision_mask = 1
+	var floor_hit := get_world_3d().direct_space_state.intersect_ray(floor_query)
+	if not floor_hit.is_empty():
+		target.y = floor_hit.position.y + height_offset
+	target.x = clampf(target.x, -15.2, 15.2)
+	target.z = clampf(target.z, -15.2, 15.2)
+	return target
+
+func _clear_sandbox_spawns() -> void:
+	for bot in allies + enemies:
+		if is_instance_valid(bot):
+			bot.queue_free()
+	allies.clear()
+	enemies.clear()
+	var prop_ids: Array[String] = []
+	for prop_id in physics_props:
+		if str(prop_id).begins_with("sandbox_prop_"):
+			prop_ids.append(str(prop_id))
+	for prop_id in prop_ids:
+		if is_instance_valid(physics_props[prop_id]):
+			physics_props[prop_id].queue_free()
+		physics_props.erase(prop_id)
+	for drop in dropped_weapons.values():
+		if is_instance_valid(drop):
+			drop.queue_free()
+	dropped_weapons.clear()
+	for child in effect_root.get_children():
+		if child != effects:
+			child.queue_free()
+	_refresh_bot_opponents()
+	hud.show_toast("Spawned objects cleared", 1.3)
 
 func _respawn_player() -> void:
 	player_dead = false
@@ -1694,8 +1901,8 @@ func _procedural_normal_texture(pattern: int) -> ImageTexture:
 func _update_hud() -> void:
 	if hud == null or player == null or current_level == null:
 		return
-	var phase_text := "DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("BUY" if phase == Phase.BUY else ("ROUND END" if phase == Phase.ENDED else ("PLANTED" if charge_planted else "LIVE")))
-	var charge_text := "FREE LOADOUT" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("DEFEND" if player_team == 1 else "CARRIED")
+	var phase_text := "SANDBOX" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else ("DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("BUY" if phase == Phase.BUY else ("ROUND END" if phase == Phase.ENDED else ("PLANTED" if charge_planted else "LIVE"))))
+	var charge_text := "CHAOS MODE" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else ("FREE LOADOUT" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else ("DEFEND" if player_team == 1 else "CARRIED"))
 	var site: Dictionary = _current_site()
 	if charge_planted:
 		charge_text = "DEFUSE %.1f" % maxf(0.0, 5.5 - defuse_progress) if defuse_progress > 0.0 else _format_time(bomb_timer)
@@ -1713,10 +1920,11 @@ func _update_hud() -> void:
 		"map_count": levels.size(),
 		"map_name": current_level.map_name,
 		"phase": phase_text,
-		"time": _format_time(bomb_timer if charge_planted else phase_timer),
+		"time": "FREE" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else _format_time(bomb_timer if charge_planted else phase_timer),
 		"attack_score": attack_score,
 		"defense_score": defense_score,
 		"money": player.money,
+		"money_text": "SANDBOX" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else "$%d" % player.money,
 		"health": player.health,
 		"armor": player.armor,
 		"weapon": weapon_spec.display_name,
@@ -1725,7 +1933,13 @@ func _update_hud() -> void:
 		"aiming": player.aiming,
 		"charge": charge_text,
 		"stamina": player.stamina,
-		"buy_visible": show_buy and started and (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH),
+		"buy_visible": show_buy and started and (phase == Phase.BUY or game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX]),
+		"sandbox_visible": show_buy and started and game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
+		"sandbox_npcs": enemies.size() + allies.size(),
+		"sandbox_props": physics_props.size() + dropped_weapons.size(),
+		"sandbox_god": sandbox_god_mode,
+		"sandbox_slow": sandbox_slow_motion,
+		"free_loadout": game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
 		"spectating": player_dead and game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL,
 		"spectator_name": "TEAMMATE",
 		"roster": _scoreboard_roster(),
@@ -1771,6 +1985,12 @@ func _ensure_input_actions() -> void:
 	_add_key_action("restart", KEY_F2)
 	_add_key_action("pause", KEY_ESCAPE)
 	_add_key_action("pause", KEY_P)
+	_add_key_action("sandbox_enemy", KEY_F5)
+	_add_key_action("sandbox_ally", KEY_F6)
+	_add_key_action("sandbox_prop", KEY_F7)
+	_add_key_action("sandbox_blast", KEY_F8)
+	_add_key_action("sandbox_slow", KEY_F9)
+	_add_key_action("sandbox_clear", KEY_F10)
 	if not InputMap.has_action("fire"):
 		InputMap.add_action("fire")
 		var mouse := InputEventMouseButton.new()

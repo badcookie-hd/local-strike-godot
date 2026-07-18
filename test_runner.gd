@@ -57,6 +57,47 @@ func _run() -> void:
 	await physics_frame
 	_check(game.phase == game.Phase.LIVE, "deathmatch starts live")
 	_check(game.enemies.size() == 5 and game.allies.size() == 4, "deathmatch uses 5v5 teams")
+	print("TEST_STAGE sandbox_start")
+	game._start_solo(LocalStrikeMatchConfig.Mode.SANDBOX, 2, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+	await physics_frame
+	_check(game.phase == game.Phase.LIVE, "sandbox starts without a buy phase")
+	_check(game.enemies.size() == 3 and game.allies.is_empty(), "sandbox starts with three hostile actors")
+	_check(game.player.invulnerable and game.player.unlimited_ammo, "sandbox enables god mode and unlimited ammunition")
+	game.show_buy = true
+	game._update_hud()
+	_check(game.hud._sandbox_panel.visible and game.hud._buy_buttons["ranger"].button.text.contains("FREE"), "sandbox toolbox and free loadout are visible")
+	game.show_buy = false
+	game.player.grant_weapon("flash")
+	game.player.shoot()
+	_check(game.player.grenade_key == "flash" and game.player.ammo == 1, "sandbox grenades are reusable")
+	var base_prop_count: int = game.physics_props.size()
+	game._on_sandbox_action("spawn_enemy", true)
+	game._on_sandbox_action("spawn_ally", true)
+	_check(game.enemies.size() == 4 and game.allies.size() == 1, "sandbox spawns enemy and ally at the aim target")
+	game._on_sandbox_action("spawn_wave", true)
+	_check(game.enemies.size() == 10 and game.allies.size() == 3, "sandbox brawl wave creates opposing groups")
+	game._on_sandbox_action("spawn_wood", true)
+	_check(game.physics_props.size() == base_prop_count + 1, "sandbox creates a registered physics prop")
+	game._on_sandbox_action("spawn_weapon", true)
+	_check(game.dropped_weapons.size() == 1, "sandbox drops a usable random weapon")
+	var sandbox_health: float = game.player.health
+	game._on_sandbox_action("explosion", true)
+	_check(is_equal_approx(game.player.health, sandbox_health), "sandbox god mode protects against force blasts")
+	game._on_sandbox_action("god_mode", false)
+	_check(not game.player.invulnerable, "sandbox god mode can be disabled")
+	game._on_sandbox_action("slow_motion", true)
+	_check(is_equal_approx(Engine.time_scale, 0.32), "sandbox slow motion changes simulation speed")
+	game._on_sandbox_action("slow_motion", false)
+	game._on_sandbox_action("clear", true)
+	_check(game.enemies.is_empty() and game.allies.is_empty(), "sandbox clear removes spawned actors")
+	_check(game.physics_props.size() == base_prop_count and game.dropped_weapons.is_empty(), "sandbox clear preserves map props and removes spawned items")
+	game._on_sandbox_action("reset", true)
+	await physics_frame
+	_check(game.enemies.size() == 3 and game.physics_props.size() == base_prop_count, "sandbox reset restores the initial world")
+	_check(is_equal_approx(Engine.time_scale, 1.0), "sandbox reset restores normal time")
+	game.queue_free()
+	await process_frame
+	await process_frame
 	print("TEST_STAGE complete")
 	if _failed:
 		quit(1)

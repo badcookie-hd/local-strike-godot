@@ -10,7 +10,7 @@ Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt So
 - `START_GAME.cmd` startet Forward+ mit Vulkan und wechselt bei einem Startfehler automatisch zu OpenGL. Es findet Godot im Projekt oder ueber `PATH`.
 - `START_GAME_COMPATIBILITY.cmd` erzwingt den sparsamen OpenGL-Modus.
 - `OPEN_EDITOR.cmd` oeffnet das Projekt im Godot-Editor.
-- `RUN_TESTS.cmd` prueft 17 Ausruestungsobjekte, Ballistik, fuenf Karten, 5v5-Spawns, Movement, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
+- `RUN_TESTS.cmd` prueft 17 Ausruestungsobjekte, Ballistik, fuenf Karten, 5v5-Spawns, Sandbox-Werkzeuge, Movement, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
 
 Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des Repositories. Details stehen in `engine/README.md`.
 
@@ -18,6 +18,7 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 
 - Defusal: Best of 7, Seitenwechsel nach drei Runden, 12 Sekunden Kaufphase, 105 Sekunden Rundenzeit und 35 Sekunden Charge-Timer.
 - Team Deathmatch: acht Minuten oder 40 Kills, freie Ausruestung und Respawns nach drei Sekunden.
+- Sandbox: lokaler Endlosmodus mit freier Ausruestung, unendlicher Munition, optionalem God Mode und frei platzierbaren Bots, Physikobjekten, Waffen, Explosionen und Brawl-Waves.
 - Solo fuellt beide Teams bis 5v5 mit Bots auf.
 - LAN verwendet ENet auf UDP-Port `27888`; lokale Server werden ueber UDP-Port `27889` gefunden. Direkte IP ist ebenfalls moeglich.
 
@@ -32,6 +33,12 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 - Bodenreibung, Eisflaechen, Luftkontrolle, Fallschaden, sicheres Ducken und automatisches Uebersteigen niedriger Deckung
 - Humanoide Scout-, Assault- und Heavy-Bots mit Sicht, Geraeuschsuche, Teamzielen und drei Schwierigkeitsstufen
 - Schiebetueren mit Blockierschutz, zerbrechliches Glas, ausschaltbare Lampen und explodierende Brennstoffbehaelter
+
+## Sandbox
+
+![Sandbox-Werkzeuge auf Old Quarter](docs/sandbox-720p.png)
+
+Sandbox wird im Hauptmenue als dritter Modus gestartet und laeuft bewusst lokal. Das Werkzeugpanel und die freie Ausruestung werden mit `B` geoeffnet. Objekte und Figuren erscheinen am anvisierten Punkt; `RESET WORLD` stellt Karte, Bots und Physikobjekte vollstaendig wieder her.
 
 ## Grafik und Audio
 
@@ -67,6 +74,13 @@ Der aktuelle Physik-Build erreichte auf einer RTX 3070 bei 1920x1080, Profil Hoc
 - `4`: Granate
 - `E`: Charge setzen, entschaerfen oder nahe Tuer bedienen
 - `B`: Ausruestungsmenue
+- `F5`: Sandbox-Gegner platzieren
+- `F6`: Sandbox-Verbuendeten platzieren
+- `F7`: Sandbox-Holzkiste platzieren
+- `F8`: Sandbox-Explosion am Zielpunkt
+- `F9`: Sandbox-Zeitlupe
+- `F10`: Sandbox-Spawns entfernen
+- `M`: im Sandbox-Modus zur naechsten Karte wechseln
 - `Tab`: Scoreboard
 - `Escape` oder `P`: Pause
 - `F2`: Match neu starten

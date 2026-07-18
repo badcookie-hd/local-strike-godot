@@ -11,15 +11,18 @@ func _capture() -> void:
 	var height := int(args[3]) if args.size() > 3 else 1080
 	var output_path := args[4] if args.size() > 4 else "user://visual_capture.png"
 	var clean_hud := args.size() > 5 and args[5] == "clean"
+	var requested_mode := int(args[6]) if args.size() > 6 else LocalStrikeMatchConfig.Mode.DEATHMATCH
 	root.size = Vector2i(width, height)
 	var scene: PackedScene = load("res://main.tscn")
 	var game = scene.instantiate()
 	root.add_child(game)
 	await process_frame
-	game._start_solo(LocalStrikeMatchConfig.Mode.DEATHMATCH, map_index, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+	game._start_solo(requested_mode, map_index, LocalStrikeMatchConfig.Difficulty.RECRUIT)
 	game._apply_quality(profile)
 	if clean_hud:
 		game.show_buy = false
+	elif requested_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		game.show_buy = true
 	for frame in range(24):
 		await process_frame
 	var image := root.get_texture().get_image()

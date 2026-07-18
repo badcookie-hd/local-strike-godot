@@ -34,6 +34,8 @@ var ammo := 12
 var reserve_ammo := 36
 var enabled := true
 var authoritative_damage := true
+var invulnerable := false
+var unlimited_ammo := false
 var helmet := true
 var crouching := false
 var aiming := false
@@ -245,9 +247,10 @@ func _physics_process(delta: float) -> void:
 	elif Input.is_action_just_pressed("select_grenade") and not grenade_key.is_empty():
 		equip_weapon(grenade_key)
 	var current_spec := WeaponCatalog.get_weapon(weapon_key)
-	aiming = Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
+	var mouse_captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	aiming = mouse_captured and Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
 	var automatic_fire := fire_mode == "auto" or fire_mode == "pump"
-	if (automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire")):
+	if mouse_captured and ((automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire"))):
 		shoot()
 	if Input.is_action_just_pressed("jump"):
 		_jump_buffer_timer = JUMP_BUFFER_TIME
@@ -319,21 +322,23 @@ func _physics_process(delta: float) -> void:
 func shoot() -> void:
 	if _fire_cooldown > 0.0 or _reloading or _equip_timer > 0.0:
 		return
-	if ammo <= 0:
+	if ammo <= 0 and not unlimited_ammo:
 		begin_reload()
 		return
 
 	var spec := WeaponCatalog.get_weapon(weapon_key)
 	_shot_sequence += 1
-	ammo -= 1
+	if not unlimited_ammo:
+		ammo -= 1
 	_fire_cooldown = spec.fire_delay
 	ammo_state[weapon_key] = {"ammo": ammo, "reserve": reserve_ammo}
 	if spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE:
 		var throw_direction := (-_camera.global_transform.basis.z + Vector3.UP * 0.24).normalized()
 		grenade_thrown.emit(_muzzle.global_position, throw_direction * 12.5, spec.category)
-		inventory.erase(weapon_key)
-		grenade_key = ""
-		equip_weapon(primary_key if not primary_key.is_empty() else secondary_key, false)
+		if not unlimited_ammo:
+			inventory.erase(weapon_key)
+			grenade_key = ""
+			equip_weapon(primary_key if not primary_key.is_empty() else secondary_key, false)
 		stats_changed.emit()
 		return
 	_weapon_root.position.z += 0.08 if spec.pellets > 1 else 0.045
@@ -379,7 +384,7 @@ func shoot() -> void:
 	_camera.rotation.x = _pitch
 
 	stats_changed.emit()
-	if ammo <= 0:
+	if ammo <= 0 and not unlimited_ammo:
 		begin_reload()
 
 func cycle_fire_mode() -> void:
@@ -516,7 +521,7 @@ func grant_weapon(key: String) -> String:
 	return "%s equipped" % spec.display_name
 
 func apply_damage(amount: float, hit_zone := "torso") -> void:
-	if health <= 0.0:
+	if health <= 0.0 or invulnerable:
 		return
 	var armor_ratio := 0.0 if hit_zone == "limb" else (0.58 if hit_zone != "head" or helmet else 0.0)
 	var absorbed := minf(armor, amount * armor_ratio)
@@ -528,7 +533,7 @@ func apply_damage(amount: float, hit_zone := "torso") -> void:
 		player_died.emit()
 
 func apply_confirmed_damage(amount: float) -> void:
-	if health <= 0.0:
+	if health <= 0.0 or invulnerable:
 		return
 	health = maxf(0.0, health - amount)
 	damage_taken.emit(amount)
@@ -567,6 +572,12 @@ func is_reloading() -> bool:
 func set_view_active(value: bool) -> void:
 	if _camera != null:
 		_camera.current = value
+
+func get_aim_origin() -> Vector3:
+	return _camera.global_position if _camera != null else global_position + Vector3.UP * CAMERA_HEIGHT
+
+func get_aim_direction() -> Vector3:
+	return -_camera.global_transform.basis.z if _camera != null else -global_transform.basis.z
 
 func equip_weapon(key: String, store_current := true) -> void:
 	if not inventory.has(key):
