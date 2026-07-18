@@ -1,7 +1,8 @@
 class_name LocalStrikeRagdoll
 extends Node3D
 
-func configure(team_color: Color, impulse: Vector3) -> void:
+func configure(team_color: Color, impulse: Vector3, persistent := false) -> void:
+	add_to_group("sandbox_ragdoll" if persistent else "temporary_ragdoll")
 	var pieces := [
 		{"size": Vector3(0.48, 0.58, 0.3), "position": Vector3(0, 1.04, 0)},
 		{"size": Vector3(0.34, 0.34, 0.34), "position": Vector3(0, 1.55, 0)},
@@ -33,6 +34,7 @@ func configure(team_color: Color, impulse: Vector3) -> void:
 		body.add_child(visual)
 		add_child(body)
 		body.apply_central_impulse(impulse * body.mass * (0.08 if index > 1 else 0.12) + Vector3(randf_range(-1.0, 1.0), randf_range(0.8, 2.2), randf_range(-1.0, 1.0)))
-	var tween := create_tween()
-	tween.tween_interval(9.0)
-	tween.tween_callback(queue_free)
+	if not persistent:
+		var tween := create_tween()
+		tween.tween_interval(9.0)
+		tween.tween_callback(queue_free)

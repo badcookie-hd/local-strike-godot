@@ -12,6 +12,7 @@ const InteractableScript = preload("res://scripts/interactable.gd")
 const EffectsManagerScript = preload("res://scripts/effects_manager.gd")
 const QualityManager = preload("res://scripts/quality_manager.gd")
 const Ballistics = preload("res://scripts/ballistics_manager.gd")
+const MeleeResolver = preload("res://scripts/melee_resolver.gd")
 const PhysicsPropScript = preload("res://scripts/physics_prop.gd")
 const DroppedWeaponScript = preload("res://scripts/dropped_weapon.gd")
 const FireZoneScript = preload("res://scripts/fire_zone.gd")
@@ -36,6 +37,7 @@ var enemies: Array[LocalStrikeEnemy] = []
 var allies: Array[LocalStrikeEnemy] = []
 var remote_avatars: Dictionary = {}
 var pending_respawns: Array[Dictionary] = []
+var sandbox_ragdolls: Array[Node3D] = []
 
 var player: LocalStrikePlayer
 var hud: LocalStrikeHUD
@@ -76,6 +78,7 @@ var current_quality := 0
 var player_team := 0
 var match_over := false
 var peer_shot_state: Dictionary = {}
+var peer_melee_state: Dictionary = {}
 var prop_sync_timer := 0.0
 var next_drop_id := 1
 var sandbox_god_mode := true
@@ -104,6 +107,7 @@ func _ready() -> void:
 	player.enabled = false
 	player.shot_fired.connect(_on_shot_fired)
 	player.shot_requested.connect(_on_player_shot_requested)
+	player.melee_attack_requested.connect(_on_player_melee_requested)
 	player.hit_confirmed.connect(_on_hit_confirmed)
 	player.player_died.connect(_on_player_died)
 	player.grenade_thrown.connect(_on_grenade_thrown)
@@ -156,17 +160,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if show_buy else Input.MOUSE_MODE_CAPTURED
 	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 		if event.is_action_pressed("sandbox_enemy"):
-			_on_sandbox_action("spawn_enemy", true)
+			_on_sandbox_action("spawn_bot", hud.get_sandbox_bot_config("enemy"))
 		elif event.is_action_pressed("sandbox_ally"):
-			_on_sandbox_action("spawn_ally", true)
+			_on_sandbox_action("spawn_bot", hud.get_sandbox_bot_config("ally"))
 		elif event.is_action_pressed("sandbox_prop"):
-			_on_sandbox_action("spawn_wood", true)
+			_on_sandbox_action("spawn_wood", {})
 		elif event.is_action_pressed("sandbox_blast"):
-			_on_sandbox_action("explosion", true)
+			_on_sandbox_action("explosion", {})
 		elif event.is_action_pressed("sandbox_slow"):
-			_on_sandbox_action("slow_motion", not sandbox_slow_motion)
+			_on_sandbox_action("slow_motion", {"enabled": not sandbox_slow_motion})
 		elif event.is_action_pressed("sandbox_clear"):
-			_on_sandbox_action("clear", true)
+			_on_sandbox_action("clear", {})
 	if (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.SANDBOX) and event.is_action_pressed("map_next"):
 		level_index = (level_index + 1) % levels.size()
 		if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
@@ -279,6 +283,8 @@ func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	player.authoritative_damage = not _is_network_client()
 	player.invulnerable = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
 	player.unlimited_ammo = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
+	player.set_extended_melee_enabled(game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX])
+	effects.set_sandbox_persistent(game_mode == LocalStrikeMatchConfig.Mode.SANDBOX)
 	sandbox_god_mode = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
 	sandbox_slow_motion = false
 	player_dead = false
@@ -297,6 +303,7 @@ func _restart_match() -> void:
 	defense_score = 0
 	round_no = 0
 	player.money = 99999 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else 800
+	player.clear_weapon_blood()
 	player.equip_weapon("sidearm", false)
 	_set_paused(false)
 	started = true
@@ -324,6 +331,13 @@ func _reset_round(show_message: bool) -> void:
 	bomb_timer = 0.0
 	charge_planted = false
 	player_dead = false
+	effects.set_sandbox_persistent(game_mode == LocalStrikeMatchConfig.Mode.SANDBOX)
+	effects.clear_blood()
+	player.clear_weapon_blood()
+	for ragdoll in sandbox_ragdolls:
+		if is_instance_valid(ragdoll):
+			ragdoll.queue_free()
+	sandbox_ragdolls.clear()
 	_load_level(level_index)
 	var spawn_position: Vector3 = current_level.player_spawn if player_team == 0 else current_level.bot_spawns[0]
 	player.reset_for_round(spawn_position)
@@ -352,6 +366,7 @@ func _load_level(index: int) -> void:
 	interactables.clear()
 	physics_props.clear()
 	dropped_weapons.clear()
+	sandbox_ragdolls.clear()
 	material_cache.clear()
 
 	current_level = levels[index]
@@ -401,17 +416,22 @@ func _spawn_teams() -> void:
 		enemies.append(_spawn_bot(1 - player_team, i, opposing_spawn))
 	_refresh_bot_opponents()
 
-func _spawn_bot(team: int, index: int, position: Vector3) -> LocalStrikeEnemy:
+func _spawn_bot(team: int, index: int, position: Vector3, spawn_config := {}) -> LocalStrikeEnemy:
 	var bot: LocalStrikeEnemy = EnemyScript.new()
-	bot.team = team
 	bot.bot_difficulty = bot_difficulty
-	bot.enemy_kind = "heavy" if index == 4 else ("scout" if index % 3 == 1 else "assault")
+	var default_kind := "heavy" if index == 4 else ("scout" if index % 3 == 1 else "assault")
+	var kind := str(spawn_config.get("kind", default_kind))
+	var default_weapon := "bulwark" if kind == "heavy" else ("whisper" if kind == "scout" else "sentinel")
+	var weapon := str(spawn_config.get("weapon", default_weapon))
+	var behavior := str(spawn_config.get("behavior", "aggressive"))
+	bot.configure_spawn(team, kind, weapon, behavior, position)
 	var typed_patrols: Array[Vector3] = []
 	for patrol in current_level.patrols:
 		typed_patrols.append(patrol)
 	bot.patrol_points = typed_patrols
 	bot.died.connect(_on_enemy_died)
 	bot.shot_fired.connect(_on_enemy_shot)
+	bot.melee_impact.connect(_on_enemy_melee_impact)
 	level_root.add_child(bot)
 	bot.global_position = position
 	return bot
@@ -519,16 +539,28 @@ func _finish_match() -> void:
 	hud.show_toast("MATCH COMPLETE  %d : %d" % [attack_score, defense_score], 5.0)
 
 func _buy_weapon(key: String) -> void:
+	var spec := WeaponCatalog.get_weapon(key)
+	if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE and key != "knife":
+		hud.show_toast("Sandbox melee weapons are unavailable in Defusal", 1.8)
+		return
 	var message := player.grant_weapon(key) if game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX] else player.try_buy(key, phase == Phase.BUY)
 	hud.show_toast(message)
 
 func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String) -> void:
 	var was_opponent := enemies.has(enemy)
-	var impulse := (position - player.global_position).normalized() * 6.0 + Vector3.UP * 2.0
+	var hit_context: Dictionary = enemy.last_hit_context
+	var hit_direction: Vector3 = hit_context.get("direction", (position - player.global_position).normalized())
+	var impulse_strength := float(hit_context.get("impulse", 6.0))
+	var impulse := hit_direction.normalized() * impulse_strength * 0.72 + Vector3.UP * 2.0
 	var ragdoll = RagdollScript.new()
 	effect_root.add_child(ragdoll)
 	ragdoll.global_position = position
-	ragdoll.configure(Color("8f3f43") if enemy.team == 1 else Color("365f70"), impulse)
+	var persistent := game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
+	ragdoll.configure(Color("8f3f43") if enemy.team == 1 else Color("365f70"), impulse, persistent)
+	if persistent:
+		_track_sandbox_ragdoll(ragdoll)
+	if str(hit_context.get("source", "ballistic")) != "melee":
+		effects.spawn_blood_pool(position, 0.9)
 	enemies.erase(enemy)
 	allies.erase(enemy)
 	if was_opponent:
@@ -557,6 +589,13 @@ func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: Stri
 		_end_round(false, "team eliminated")
 	else:
 		_refresh_bot_opponents()
+
+func _track_sandbox_ragdoll(ragdoll: Node3D) -> void:
+	sandbox_ragdolls.append(ragdoll)
+	while sandbox_ragdolls.size() > 24:
+		var oldest: Node3D = sandbox_ragdolls.pop_front()
+		if is_instance_valid(oldest):
+			oldest.queue_free()
 
 func _on_player_died() -> void:
 	player_dead = true
@@ -593,11 +632,53 @@ func _on_player_shot_requested(sequence: int, origin: Vector3, direction: Vector
 	if _is_network_client():
 		_request_network_shot.rpc_id(1, sequence, origin, direction, weapon_key, mode)
 
+func _on_player_melee_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, heavy: bool) -> void:
+	if _is_network_client():
+		_request_network_melee.rpc_id(1, sequence, origin, direction, weapon_key, heavy)
+	else:
+		_execute_melee(player, sequence, origin, direction, weapon_key, heavy, multiplayer.get_unique_id())
+
 func _on_enemy_shot(origin: Vector3, end: Vector3, hit: bool) -> void:
 	AudioManager.play_shot(origin, "rifle")
 	_create_tracer(origin, end, Color("ef5b5b"))
 	if hit:
 		effects.spawn_impact(end, (origin - end).normalized(), "flesh", true)
+
+func _on_enemy_melee_impact(position: Vector3, normal: Vector3, intensity: float, killed: bool) -> void:
+	effects.spawn_blood_hit(position, normal, -normal, intensity, killed)
+
+func _execute_melee(attacker: Node3D, sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, heavy: bool, attacker_peer: int) -> void:
+	if not WeaponCatalog.all().has(weapon_key):
+		return
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.slot != LocalStrikeWeaponDefinition.Slot.MELEE:
+		return
+	var result := MeleeResolver.resolve_attack(get_world_3d().direct_space_state, origin, direction, spec, [attacker.get_rid()], heavy)
+	for hit in result.hits:
+		var target: Object = hit.target
+		var target_node := target as Node3D
+		var target_base := target as Node
+		var actor_hit := target_base != null and target_base.is_in_group("damageable_actor")
+		var surface := "flesh" if actor_hit else str(target.get_meta("surface_type", "concrete"))
+		var context := {"source": "melee", "weapon": weapon_key, "heavy": heavy, "direction": direction.normalized(), "impulse": hit.impulse, "blood_intensity": hit.blood_intensity}
+		var killed := false
+		if target.has_method("take_damage"):
+			killed = bool(target.take_damage(float(hit.damage), str(hit.zone), context))
+		elif target.has_method("apply_damage"):
+			target.apply_damage(float(hit.damage), str(hit.zone), context)
+			var target_health = target.get("health")
+			killed = target_health != null and float(target_health) <= 0.0
+		if target.has_method("apply_gameplay_impulse") and target_node != null:
+			target.apply_gameplay_impulse(direction.normalized() * float(hit.impulse), hit.position - target_node.global_position)
+		hit["killed"] = killed
+		hit["actor_hit"] = actor_hit
+		hit["surface"] = surface
+	var clean := MeleeResolver.network_result(result)
+	clean["sequence"] = sequence
+	clean["attacker_peer"] = attacker_peer
+	if NetworkManager.peer != null and multiplayer.is_server():
+		_confirm_melee.rpc(clean)
+	_confirm_melee(clean)
 
 func _team_alive(team: int) -> bool:
 	if player_team == team and player.health > 0.0:
@@ -662,25 +743,23 @@ func _update_sandbox(delta: float) -> void:
 			player.invulnerable = sandbox_god_mode
 			player.unlimited_ammo = true
 
-func _on_sandbox_action(action: String, value: bool) -> void:
+func _on_sandbox_action(action: String, payload: Dictionary) -> void:
 	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX or not started:
 		return
 	match action:
 		"god_mode":
-			sandbox_god_mode = value
-			player.invulnerable = value
-			if value:
+			sandbox_god_mode = bool(payload.get("enabled", false))
+			player.invulnerable = sandbox_god_mode
+			if sandbox_god_mode:
 				player.health = 100.0
 				player.armor = 100.0
-			hud.show_toast("God mode %s" % ["enabled" if value else "disabled"], 1.4)
+			hud.show_toast("God mode %s" % ["enabled" if sandbox_god_mode else "disabled"], 1.4)
 		"slow_motion":
-			sandbox_slow_motion = value
-			Engine.time_scale = 0.32 if value else 1.0
-			hud.show_toast("Slow motion %s" % ["enabled" if value else "disabled"], 1.4)
-		"spawn_enemy":
-			_spawn_sandbox_bot(1)
-		"spawn_ally":
-			_spawn_sandbox_bot(0)
+			sandbox_slow_motion = bool(payload.get("enabled", false))
+			Engine.time_scale = 0.32 if sandbox_slow_motion else 1.0
+			hud.show_toast("Slow motion %s" % ["enabled" if sandbox_slow_motion else "disabled"], 1.4)
+		"spawn_bot":
+			_spawn_sandbox_bot(payload)
 		"spawn_wave":
 			_spawn_sandbox_wave()
 		"spawn_wood":
@@ -688,7 +767,9 @@ func _on_sandbox_action(action: String, value: bool) -> void:
 		"spawn_metal":
 			_spawn_sandbox_prop("metal")
 		"spawn_weapon":
-			_spawn_sandbox_weapon()
+			_spawn_sandbox_weapon(payload)
+		"equip_weapon":
+			_equip_sandbox_weapon(payload)
 		"explosion":
 			var blast_position := _sandbox_target_position(0.2)
 			_create_burst(blast_position + Vector3.UP * 0.3, Color("ff8a38"), 38)
@@ -697,44 +778,51 @@ func _on_sandbox_action(action: String, value: bool) -> void:
 			_apply_radial_damage(blast_position, 82.0, 6.0)
 		"clear":
 			_clear_sandbox_spawns()
+		"clear_npcs":
+			_clear_sandbox_npcs(true)
+		"clear_weapons":
+			_clear_sandbox_weapons(true)
+		"clear_blood":
+			_clear_sandbox_blood(true)
+		"remove_target":
+			_remove_sandbox_target()
 		"reset":
 			_restart_match()
 
-func _spawn_sandbox_bot(team: int) -> void:
-	if enemies.size() + allies.size() >= 40:
-		hud.show_toast("NPC limit reached", 1.3)
-		return
-	sandbox_spawn_serial += 1
-	var position := _sandbox_target_position(0.05)
-	var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position)
-	if team == player_team:
-		allies.append(bot)
-	else:
-		enemies.append(bot)
-	_refresh_bot_opponents()
-	hud.show_toast("Ally spawned" if team == player_team else "Enemy spawned", 1.1)
-
-func _spawn_sandbox_wave() -> void:
-	var center := _sandbox_target_position(0.05)
-	var available := mini(8, 40 - enemies.size() - allies.size())
+func _spawn_sandbox_bot(config: Dictionary) -> int:
+	var available := mini(clampi(int(config.get("count", 1)), 1, 10), 40 - enemies.size() - allies.size())
 	if available <= 0:
 		hud.show_toast("NPC limit reached", 1.3)
-		return
+		return 0
+	var team := player_team if str(config.get("team", "enemy")) == "ally" else 1 - player_team
+	var kind := str(config.get("kind", "assault"))
+	if kind not in ["scout", "assault", "heavy"]:
+		kind = "assault"
+	var weapon := str(config.get("weapon", "sentinel"))
+	if weapon not in WeaponCatalog.bot_weapon_keys():
+		weapon = "sentinel"
+	var behavior := str(config.get("behavior", "aggressive"))
+	if behavior not in ["aggressive", "guard", "passive"]:
+		behavior = "aggressive"
+	var center := _sandbox_target_position(0.05)
 	for index in range(available):
 		sandbox_spawn_serial += 1
-		var angle := TAU * float(index) / 8.0
-		var radius := 2.0 + float(index % 2) * 1.2
-		var position := center + Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
-		position.x = clampf(position.x, -15.0, 15.0)
-		position.z = clampf(position.z, -15.0, 15.0)
-		var team := 0 if index >= 6 else 1
-		var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position)
+		var position := _safe_sandbox_spawn_position(center, index)
+		var bot := _spawn_bot(team, sandbox_spawn_serial % 5, position, {"kind": kind, "weapon": weapon, "behavior": behavior})
+		bot.guard_anchor = position
 		if team == player_team:
 			allies.append(bot)
 		else:
 			enemies.append(bot)
 	_refresh_bot_opponents()
-	hud.show_toast("Brawl wave spawned", 1.4)
+	hud.show_toast("%d %s %s spawned" % [available, kind.capitalize(), "allies" if team == player_team else "enemies"], 1.3)
+	return available
+
+func _spawn_sandbox_wave() -> void:
+	var enemy_count := _spawn_sandbox_bot({"team": "enemy", "kind": "assault", "weapon": "crowbar", "behavior": "aggressive", "count": 6})
+	var ally_count := _spawn_sandbox_bot({"team": "ally", "kind": "assault", "weapon": "baseball_bat", "behavior": "aggressive", "count": 2})
+	if enemy_count + ally_count > 0:
+		hud.show_toast("Brawl wave: %d vs %d" % [enemy_count, ally_count], 1.4)
 
 func _spawn_sandbox_prop(surface_type: String) -> void:
 	if physics_props.size() >= 64:
@@ -753,15 +841,58 @@ func _spawn_sandbox_prop(surface_type: String) -> void:
 	physics_props[prop_id] = prop
 	hud.show_toast("%s prop spawned" % surface_type.capitalize(), 1.1)
 
-func _spawn_sandbox_weapon() -> void:
-	if dropped_weapons.size() >= 32:
+func _spawn_sandbox_weapon(config: Dictionary) -> int:
+	var key := str(config.get("weapon", "ranger"))
+	if key not in WeaponCatalog.sandbox_weapon_keys():
+		key = "ranger"
+	var available := mini(clampi(int(config.get("count", 1)), 1, 10), 32 - dropped_weapons.size())
+	if available <= 0:
 		hud.show_toast("Weapon drop limit reached", 1.3)
-		return
-	var keys := WeaponCatalog.primary_keys()
-	var key: String = keys[randi() % keys.size()]
+		return 0
 	var spec := WeaponCatalog.get_weapon(key)
-	_spawn_dropped_weapon(key, spec.magazine, spec.reserve, _sandbox_target_position(0.35), Vector3.UP * 0.5)
-	hud.show_toast("%s dropped" % spec.display_name, 1.1)
+	var center := _sandbox_target_position(0.35)
+	for index in range(available):
+		var column := index % 4
+		var row := int(index / 4)
+		var position := center + Vector3((column - 1.5) * 0.48, row * 0.16, row * 0.42)
+		_spawn_dropped_weapon(key, spec.magazine, spec.reserve, position, Vector3.UP * 0.5, "", 0.0)
+	hud.show_toast("%d x %s dropped" % [available, spec.display_name], 1.2)
+	return available
+
+func _equip_sandbox_weapon(config: Dictionary) -> void:
+	var key := str(config.get("weapon", "ranger"))
+	if key not in WeaponCatalog.sandbox_weapon_keys():
+		hud.show_toast("Unknown sandbox weapon", 1.2)
+		return
+	hud.show_toast(player.grant_weapon(key), 1.2)
+
+func _safe_sandbox_spawn_position(center: Vector3, index: int) -> Vector3:
+	for attempt in range(12):
+		var slot := index + attempt
+		var angle := float(slot) * 2.39996
+		var radius := 0.85 * sqrt(float(slot))
+		var candidate := center + Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		var floor_ray := PhysicsRayQueryParameters3D.create(candidate + Vector3.UP * 4.0, candidate + Vector3.DOWN * 7.0)
+		floor_ray.exclude = [player.get_rid()]
+		floor_ray.collision_mask = 1
+		var floor_hit := get_world_3d().direct_space_state.intersect_ray(floor_ray)
+		if not floor_hit.is_empty():
+			candidate.y = floor_hit.position.y
+		var occupied := Vector2(candidate.x - player.global_position.x, candidate.z - player.global_position.z).length() < 1.0
+		for bot in allies + enemies:
+			if is_instance_valid(bot) and Vector2(candidate.x - bot.global_position.x, candidate.z - bot.global_position.z).length() < 1.0:
+				occupied = true
+				break
+		if occupied:
+			continue
+		var point_query := PhysicsPointQueryParameters3D.new()
+		point_query.position = candidate + Vector3.UP * 1.0
+		point_query.exclude = [player.get_rid()]
+		point_query.collision_mask = 1
+		if get_world_3d().direct_space_state.intersect_point(point_query, 1).is_empty():
+			return candidate
+	var fallback_angle := float(index) * 2.39996
+	return center + Vector3(cos(fallback_angle), 0.05, sin(fallback_angle)) * (0.9 + index * 0.35)
 
 func _sandbox_target_position(height_offset: float) -> Vector3:
 	var origin := player.get_aim_origin()
@@ -782,11 +913,8 @@ func _sandbox_target_position(height_offset: float) -> Vector3:
 	return target
 
 func _clear_sandbox_spawns() -> void:
-	for bot in allies + enemies:
-		if is_instance_valid(bot):
-			bot.queue_free()
-	allies.clear()
-	enemies.clear()
+	_clear_sandbox_npcs(false)
+	_clear_sandbox_weapons(false)
 	var prop_ids: Array[String] = []
 	for prop_id in physics_props:
 		if str(prop_id).begins_with("sandbox_prop_"):
@@ -795,15 +923,79 @@ func _clear_sandbox_spawns() -> void:
 		if is_instance_valid(physics_props[prop_id]):
 			physics_props[prop_id].queue_free()
 		physics_props.erase(prop_id)
+	_clear_sandbox_blood(false)
+	_refresh_bot_opponents()
+	hud.show_toast("Spawned objects cleared", 1.3)
+
+func _clear_sandbox_npcs(show_message: bool) -> void:
+	for bot in allies + enemies:
+		if is_instance_valid(bot):
+			bot.queue_free()
+	allies.clear()
+	enemies.clear()
+	_refresh_bot_opponents()
+	if show_message:
+		hud.show_toast("All sandbox NPCs removed", 1.2)
+
+func _clear_sandbox_weapons(show_message: bool) -> void:
 	for drop in dropped_weapons.values():
 		if is_instance_valid(drop):
 			drop.queue_free()
 	dropped_weapons.clear()
-	for child in effect_root.get_children():
-		if child != effects:
-			child.queue_free()
-	_refresh_bot_opponents()
-	hud.show_toast("Spawned objects cleared", 1.3)
+	if show_message:
+		hud.show_toast("Dropped weapons removed", 1.2)
+
+func _clear_sandbox_blood(show_message: bool) -> void:
+	effects.clear_blood()
+	player.clear_weapon_blood()
+	for drop in dropped_weapons.values():
+		if is_instance_valid(drop):
+			drop.clear_blood()
+	for bot in allies + enemies:
+		if is_instance_valid(bot):
+			bot.clear_weapon_blood()
+	for ragdoll in sandbox_ragdolls:
+		if is_instance_valid(ragdoll):
+			ragdoll.queue_free()
+	sandbox_ragdolls.clear()
+	if show_message:
+		hud.show_toast("Blood and bodies cleared", 1.2)
+
+func _remove_sandbox_target() -> void:
+	var origin := player.get_aim_origin()
+	var ray := PhysicsRayQueryParameters3D.create(origin, origin + player.get_aim_direction() * 18.0)
+	ray.exclude = [player.get_rid()]
+	ray.collision_mask = 15
+	var hit := get_world_3d().direct_space_state.intersect_ray(ray)
+	if hit.is_empty():
+		hud.show_toast("No sandbox object targeted", 1.1)
+		return
+	var node := hit.collider as Node
+	while node != null:
+		if allies.has(node) or enemies.has(node):
+			allies.erase(node)
+			enemies.erase(node)
+			node.queue_free()
+			_refresh_bot_opponents()
+			hud.show_toast("NPC removed", 1.1)
+			return
+		if node is LocalStrikeDroppedWeapon:
+			dropped_weapons.erase(node.drop_id)
+			node.queue_free()
+			hud.show_toast("Weapon removed", 1.1)
+			return
+		if node is LocalStrikePhysicsProp and str(node.prop_id).begins_with("sandbox_prop_"):
+			physics_props.erase(node.prop_id)
+			node.queue_free()
+			hud.show_toast("Prop removed", 1.1)
+			return
+		if node.is_in_group("sandbox_ragdoll"):
+			sandbox_ragdolls.erase(node)
+			node.queue_free()
+			hud.show_toast("Body removed", 1.1)
+			return
+		node = node.get_parent()
+	hud.show_toast("Map geometry cannot be removed", 1.2)
 
 func _respawn_player() -> void:
 	player_dead = false
@@ -961,22 +1153,22 @@ func _handle_authoritative_weapon_action(actor_position: Vector3, weapon_key: St
 			nearest_distance = distance
 	if nearest != null:
 		if peer_id == 1:
-			player.pickup_weapon(nearest.weapon_key, nearest.ammo, nearest.reserve)
+			player.pickup_weapon(nearest.weapon_key, nearest.ammo, nearest.reserve, nearest.bloodiness)
 			hud.show_toast("Picked up %s" % player.get_weapon_name(), 1.4)
 		else:
-			_confirm_network_pickup.rpc_id(peer_id, nearest.weapon_key, nearest.ammo, nearest.reserve)
+			_confirm_network_pickup.rpc_id(peer_id, nearest.weapon_key, nearest.ammo, nearest.reserve, nearest.bloodiness)
 		dropped_weapons.erase(nearest.drop_id)
 		if NetworkManager.peer != null:
 			_remove_network_drop.rpc(nearest.drop_id)
 		nearest.queue_free()
 		return
-	var data := player.remove_current_weapon_for_drop() if peer_id == 1 else {"key": weapon_key, "ammo": current_ammo, "reserve": reserve}
+	var data := player.remove_current_weapon_for_drop() if peer_id == 1 else {"key": weapon_key, "ammo": current_ammo, "reserve": reserve, "bloodiness": 0.0}
 	if data.is_empty():
 		if peer_id == 1:
-			hud.show_toast("No firearm to drop", 1.2)
+			hud.show_toast("No weapon to drop", 1.2)
 		return
 	var forward: Vector3 = -player.global_transform.basis.z if peer_id == 1 else -remote_avatars[peer_id].global_transform.basis.z
-	_spawn_dropped_weapon(data.key, int(data.ammo), int(data.reserve), actor_position + Vector3.UP * 1.0 + forward * 0.7, forward * 4.0 + Vector3.UP * 1.2)
+	_spawn_dropped_weapon(data.key, int(data.ammo), int(data.reserve), actor_position + Vector3.UP * 1.0 + forward * 0.7, forward * 4.0 + Vector3.UP * 1.2, "", float(data.get("bloodiness", 0.0)))
 	if peer_id != 1:
 		_confirm_network_drop.rpc_id(peer_id, weapon_key)
 
@@ -987,15 +1179,16 @@ func _request_weapon_pickup_drop(weapon_key: String, current_ammo: int, reserve:
 	var sender := multiplayer.get_remote_sender_id()
 	var avatar: Node3D = remote_avatars.get(sender)
 	var spec := WeaponCatalog.get_weapon(weapon_key)
-	if not is_instance_valid(avatar) or spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY]:
+	var slot_allowed := spec.slot in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY] or (game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE)
+	if not is_instance_valid(avatar) or not slot_allowed:
 		return
 	if current_ammo < 0 or current_ammo > spec.magazine or reserve < 0 or reserve > spec.reserve:
 		return
 	_handle_authoritative_weapon_action(avatar.global_position, weapon_key, current_ammo, reserve, sender)
 
 @rpc("authority", "call_remote", "reliable")
-func _confirm_network_pickup(weapon_key: String, current_ammo: int, reserve: int) -> void:
-	player.pickup_weapon(weapon_key, current_ammo, reserve)
+func _confirm_network_pickup(weapon_key: String, current_ammo: int, reserve: int, bloodiness: float) -> void:
+	player.pickup_weapon(weapon_key, current_ammo, reserve, bloodiness)
 	hud.show_toast("Picked up %s" % player.get_weapon_name(), 1.4)
 
 @rpc("authority", "call_remote", "reliable")
@@ -1009,11 +1202,11 @@ func _remove_network_drop(drop_id: String) -> void:
 		dropped_weapons[drop_id].queue_free()
 		dropped_weapons.erase(drop_id)
 
-func _spawn_dropped_weapon(key: String, current_ammo: int, reserve: int, position: Vector3, impulse: Vector3, forced_id := ""):
+func _spawn_dropped_weapon(key: String, current_ammo: int, reserve: int, position: Vector3, impulse: Vector3, forced_id := "", bloodiness := 0.0):
 	var drop_id := forced_id if not forced_id.is_empty() else "drop_%d" % next_drop_id
 	next_drop_id += 1
 	var drop = DroppedWeaponScript.new()
-	drop.configure(drop_id, key, current_ammo, reserve)
+	drop.configure(drop_id, key, current_ammo, reserve, bloodiness)
 	level_root.add_child(drop)
 	drop.global_position = position
 	drop.linear_velocity = impulse
@@ -1159,7 +1352,7 @@ func _apply_physics_snapshot(snapshot: Dictionary) -> void:
 	for drop_id in snapshot.get("drops", {}):
 		var state: Dictionary = snapshot.drops[drop_id]
 		if not dropped_weapons.has(drop_id):
-			_spawn_dropped_weapon(state.weapon, int(state.ammo), int(state.reserve), state.transform.origin, Vector3.ZERO, str(drop_id))
+			_spawn_dropped_weapon(state.weapon, int(state.ammo), int(state.reserve), state.transform.origin, Vector3.ZERO, str(drop_id), float(state.get("bloodiness", 0.0)))
 		if dropped_weapons.has(drop_id) and is_instance_valid(dropped_weapons[drop_id]):
 			var drop = dropped_weapons[drop_id]
 			drop.transform = state.transform
@@ -1185,6 +1378,48 @@ func _on_network_avatar_damaged(peer_id: int, amount: float, hit_zone: String) -
 @rpc("authority", "call_remote", "reliable")
 func _receive_network_damage(amount: float, hit_zone: String) -> void:
 	player.apply_confirmed_damage(amount)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_network_melee(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, heavy: bool) -> void:
+	if not multiplayer.is_server() or not WeaponCatalog.all().has(weapon_key):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var avatar: LocalStrikeNetworkAvatar = remote_avatars.get(sender)
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL and weapon_key != "knife":
+		return
+	if not is_instance_valid(avatar) or spec.slot != LocalStrikeWeaponDefinition.Slot.MELEE or avatar.weapon_name != spec.display_name or avatar.global_position.distance_to(origin) > 2.6:
+		return
+	var horizontal_direction := Vector3(direction.x, 0.0, direction.z).normalized()
+	if horizontal_direction.length_squared() < 0.5 or horizontal_direction.dot(-avatar.global_transform.basis.z) < 0.55:
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	var previous: Dictionary = peer_melee_state.get(sender, {"sequence": 0, "next_time": -10.0})
+	var required_delay := spec.melee_heavy_recovery if heavy else spec.melee_light_recovery
+	if sequence <= int(previous.sequence) or now < float(previous.next_time):
+		return
+	peer_melee_state[sender] = {"sequence": sequence, "next_time": now + required_delay * 0.82, "weapon": weapon_key}
+	_execute_melee(avatar, sequence, origin, direction, weapon_key, heavy, sender)
+
+@rpc("authority", "call_remote", "reliable")
+func _confirm_melee(result: Dictionary) -> void:
+	var connected_hit := false
+	var killed_target := false
+	var stain_amount := 0.0
+	for hit in result.get("hits", []):
+		var actor_hit := bool(hit.get("actor_hit", true))
+		if actor_hit:
+			var intensity := float(hit.get("blood_intensity", 1.0))
+			effects.spawn_blood_hit(hit.position, hit.get("normal", Vector3.UP), -hit.get("normal", Vector3.UP), intensity, bool(hit.get("killed", false)))
+			connected_hit = true
+			killed_target = killed_target or bool(hit.get("killed", false))
+			stain_amount = maxf(stain_amount, intensity * 0.18)
+		else:
+			var surface := str(hit.get("surface", "concrete"))
+			effects.spawn_impact(hit.position, hit.get("normal", Vector3.UP), surface, false)
+			AudioManager.play_impact(hit.position, surface)
+	if connected_hit and int(result.get("attacker_peer", -1)) == multiplayer.get_unique_id():
+		player.confirm_melee_hit(killed_target, stain_amount)
 
 @rpc("any_peer", "call_remote", "reliable")
 func _request_network_shot(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, mode: String) -> void:
@@ -1928,7 +2163,7 @@ func _update_hud() -> void:
 		"health": player.health,
 		"armor": player.armor,
 		"weapon": weapon_spec.display_name,
-		"ammo": "RELOAD" if player.is_reloading() else "%d / %d" % [player.ammo, player.reserve_ammo],
+		"ammo": "LIGHT / RMB HEAVY" if weapon_spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else ("RELOAD" if player.is_reloading() else "%d / %d" % [player.ammo, player.reserve_ammo]),
 		"fire_mode": player.get_fire_mode(),
 		"aiming": player.aiming,
 		"charge": charge_text,
@@ -1937,9 +2172,11 @@ func _update_hud() -> void:
 		"sandbox_visible": show_buy and started and game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
 		"sandbox_npcs": enemies.size() + allies.size(),
 		"sandbox_props": physics_props.size() + dropped_weapons.size(),
+		"sandbox_weapons": dropped_weapons.size(),
+		"sandbox_bodies": sandbox_ragdolls.size(),
 		"sandbox_god": sandbox_god_mode,
 		"sandbox_slow": sandbox_slow_motion,
-		"free_loadout": game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
+		"free_loadout": game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.SANDBOX],
 		"spectating": player_dead and game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL,
 		"spectator_name": "TEAMMATE",
 		"roster": _scoreboard_roster(),

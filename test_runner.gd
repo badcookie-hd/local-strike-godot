@@ -66,35 +66,75 @@ func _run() -> void:
 	game.show_buy = true
 	game._update_hud()
 	_check(game.hud._sandbox_panel.visible and game.hud._buy_buttons["ranger"].button.text.contains("FREE"), "sandbox toolbox and free loadout are visible")
+	_check(game.hud._sandbox_team_select != null and game.hud._sandbox_weapon_select.item_count == 22, "sandbox toolbox exposes configurable bot and weapon selectors")
 	game.show_buy = false
 	game.player.grant_weapon("flash")
 	game.player.shoot()
 	_check(game.player.grenade_key == "flash" and game.player.ammo == 1, "sandbox grenades are reusable")
 	var base_prop_count: int = game.physics_props.size()
-	game._on_sandbox_action("spawn_enemy", true)
-	game._on_sandbox_action("spawn_ally", true)
-	_check(game.enemies.size() == 4 and game.allies.size() == 1, "sandbox spawns enemy and ally at the aim target")
-	game._on_sandbox_action("spawn_wave", true)
-	_check(game.enemies.size() == 10 and game.allies.size() == 3, "sandbox brawl wave creates opposing groups")
-	game._on_sandbox_action("spawn_wood", true)
+	game._on_sandbox_action("spawn_bot", {"team": "enemy", "kind": "heavy", "weapon": "fire_axe", "behavior": "guard", "count": 2})
+	game._on_sandbox_action("spawn_bot", {"team": "ally", "kind": "scout", "weapon": "baseball_bat", "behavior": "passive", "count": 1})
+	_check(game.enemies.size() == 5 and game.allies.size() == 1, "sandbox spawns the requested bot count and teams")
+	var configured_enemy = game.enemies.back()
+	var second_configured_enemy = game.enemies[game.enemies.size() - 2]
+	var configured_ally = game.allies.back()
+	_check(configured_enemy.enemy_kind == "heavy" and configured_enemy.weapon_key == "fire_axe" and configured_enemy.sandbox_behavior == "guard", "enemy bot preserves exact type weapon and guard behavior")
+	_check(configured_enemy.global_position.distance_to(second_configured_enemy.global_position) > 0.3, "multi-spawn uses separated collision-safe positions")
+	_check(configured_ally.enemy_kind == "scout" and configured_ally.weapon_key == "baseball_bat" and configured_ally.sandbox_behavior == "passive", "ally bot preserves exact type weapon and passive behavior")
+	game._on_sandbox_action("spawn_wave", {})
+	_check(game.enemies.size() == 11 and game.allies.size() == 3, "sandbox brawl wave creates opposing melee groups")
+	game._on_sandbox_action("spawn_wood", {})
 	_check(game.physics_props.size() == base_prop_count + 1, "sandbox creates a registered physics prop")
-	game._on_sandbox_action("spawn_weapon", true)
-	_check(game.dropped_weapons.size() == 1, "sandbox drops a usable random weapon")
+	game._on_sandbox_action("spawn_weapon", {"weapon": "machete", "count": 2})
+	_check(game.dropped_weapons.size() == 2, "sandbox drops the requested exact weapon count")
+	for drop in game.dropped_weapons.values():
+		_check(drop.weapon_key == "machete" and drop.get_child_count() >= 2, "dropped weapon keeps its exact key and procedural worldmodel")
+	game._on_sandbox_action("equip_weapon", {"weapon": "fire_axe"})
+	_check(game.player.weapon_key == "fire_axe" and game.player.melee_key == "fire_axe", "sandbox equips an exact melee weapon")
+	configured_ally.global_position = game.player.global_position - game.player.global_transform.basis.z * 1.35
+	configured_ally.sandbox_behavior = "passive"
+	await physics_frame
+	var target_health: float = configured_ally.health
+	var melee_ammo: int = game.player.ammo
+	game.player._fire_cooldown = 0.0
+	game.player._equip_timer = 0.0
+	game.player.melee_attack(false)
+	_check(configured_ally.health < target_health, "spatial melee arc damages a target in front of the player")
+	_check(game.player.ammo == melee_ammo, "melee attacks never consume ammunition")
+	game.player.confirm_melee_hit(false, 0.7)
+	var melee_drop: Dictionary = game.player.remove_current_weapon_for_drop()
+	_check(melee_drop.key == "fire_axe" and float(melee_drop.bloodiness) > 0.0 and game.player.melee_key == "knife", "melee drops preserve blood state and restore the default knife")
 	var sandbox_health: float = game.player.health
-	game._on_sandbox_action("explosion", true)
+	game._on_sandbox_action("explosion", {})
 	_check(is_equal_approx(game.player.health, sandbox_health), "sandbox god mode protects against force blasts")
-	game._on_sandbox_action("god_mode", false)
+	game._on_sandbox_action("god_mode", {"enabled": false})
 	_check(not game.player.invulnerable, "sandbox god mode can be disabled")
-	game._on_sandbox_action("slow_motion", true)
+	game._on_sandbox_action("slow_motion", {"enabled": true})
 	_check(is_equal_approx(Engine.time_scale, 0.32), "sandbox slow motion changes simulation speed")
-	game._on_sandbox_action("slow_motion", false)
-	game._on_sandbox_action("clear", true)
+	game._on_sandbox_action("slow_motion", {"enabled": false})
+	game.effects.spawn_blood_hit(game.player.global_position, Vector3.UP, Vector3.FORWARD, 1.8, true)
+	_check(game.effects.get_pool_counts().blood > 0 and game.effects.get_pool_counts().pools > 0, "sandbox melee blood creates splatters and a pool")
+	for index in range(26):
+		var persistent_body := Node3D.new()
+		persistent_body.add_to_group("sandbox_ragdoll")
+		game.effect_root.add_child(persistent_body)
+		game._track_sandbox_ragdoll(persistent_body)
+	_check(game.sandbox_ragdolls.size() == 24, "sandbox ragdoll pool keeps at most 24 persistent bodies")
+	var stained_drop = game.dropped_weapons.values()[0]
+	stained_drop.bloodiness = 0.8
+	game._on_sandbox_action("clear_blood", {})
+	_check(game.effects.get_pool_counts().blood == 0 and game.effects.get_pool_counts().pools == 0 and game.sandbox_ragdolls.is_empty(), "sandbox cleanup clears blood pools and persistent bodies")
+	_check(is_zero_approx(stained_drop.bloodiness), "sandbox cleanup removes blood from dropped weapons")
+	game._on_sandbox_action("clear", {})
 	_check(game.enemies.is_empty() and game.allies.is_empty(), "sandbox clear removes spawned actors")
 	_check(game.physics_props.size() == base_prop_count and game.dropped_weapons.is_empty(), "sandbox clear preserves map props and removes spawned items")
-	game._on_sandbox_action("reset", true)
+	game._on_sandbox_action("reset", {})
 	await physics_frame
 	_check(game.enemies.size() == 3 and game.physics_props.size() == base_prop_count, "sandbox reset restores the initial world")
 	_check(is_equal_approx(Engine.time_scale, 1.0), "sandbox reset restores normal time")
+	game._start_solo(LocalStrikeMatchConfig.Mode.DEFUSAL, 0, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+	await physics_frame
+	_check(game.player.melee_key == "knife" and not game.player.inventory.has("fire_axe"), "defusal removes extended sandbox melee inventory")
 	game.queue_free()
 	await process_frame
 	await process_frame
@@ -107,13 +147,20 @@ func _run() -> void:
 
 func _test_weapon_data() -> void:
 	var catalog := LocalStrikeWeaponCatalog.all()
-	_check(catalog.size() == 17, "complete weapon catalog")
+	_check(catalog.size() == 22, "complete 22 item weapon catalog")
 	for key in catalog:
 		var weapon: LocalStrikeWeaponDefinition = catalog[key]
 		_check(not weapon.display_name.is_empty(), "%s has display name" % key)
 		_check(weapon.magazine > 0, "%s has valid magazine" % key)
 		_check(weapon.range > 0.0, "%s has valid range" % key)
 		_check(not weapon.recoil_pattern.is_empty() or weapon.slot in [LocalStrikeWeaponDefinition.Slot.GRENADE, LocalStrikeWeaponDefinition.Slot.MELEE], "%s has recoil data" % key)
+	var melee_keys := LocalStrikeWeaponCatalog.melee_keys()
+	_check(melee_keys.size() == 6, "six distinct melee weapons are available")
+	for key in melee_keys:
+		var melee := LocalStrikeWeaponCatalog.get_weapon(key)
+		_check(melee.melee_reach > 1.5 and melee.melee_arc_degrees > 45.0, "%s has a spatial melee profile" % key)
+		_check(melee.melee_heavy_damage > melee.melee_light_damage and melee.melee_heavy_recovery > melee.melee_light_recovery, "%s heavy attack is stronger and slower" % key)
+		_check(melee.melee_impulse > 0.0 and melee.blood_multiplier > 0.0, "%s has impulse and blood tuning" % key)
 
 func _test_ballistics_data() -> void:
 	var rifle := LocalStrikeWeaponCatalog.get_weapon("sentinel")
@@ -185,11 +232,14 @@ func _test_effect_limits() -> void:
 	manager.set_quality(LocalStrikeQualityManager.Profile.LOW, true)
 	for index in range(22):
 		manager.spawn_impact(Vector3(index * 0.02, 0, 0), Vector3.UP, "concrete")
-	for index in range(11):
-		manager.spawn_impact(Vector3(index * 0.02, 0, 1), Vector3.UP, "flesh", true)
+	for index in range(38):
+		manager.spawn_blood_hit(Vector3(index * 0.02, 0, 1), Vector3.UP, Vector3.FORWARD, 1.2, index % 4 == 0)
 	var counts := manager.get_pool_counts()
 	_check(counts.bullet <= 18, "low quality bullet decal pool is capped")
-	_check(counts.blood <= 8, "low quality blood decal pool is capped")
+	_check(counts.blood <= 24, "low quality blood splatter pool is capped")
+	_check(counts.pools <= 6, "low quality blood pool is capped")
+	manager.clear_blood()
+	_check(manager.get_pool_counts().blood == 0 and manager.get_pool_counts().pools == 0, "blood pools can be cleared explicitly")
 	manager.queue_free()
 	await process_frame
 

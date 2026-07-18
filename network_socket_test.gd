@@ -20,7 +20,10 @@ func _run() -> void:
 		client_a.poll()
 		client_b.poll()
 		await process_frame
-	var snapshot := JSON.stringify({"door-harbor": {"opened": true, "revision": 4}}).to_utf8_buffer()
+	var snapshot := JSON.stringify({
+		"interactables": {"door-harbor": {"opened": true, "revision": 4}},
+		"confirm_melee": {"sequence": 17, "weapon": "fire_axe", "heavy": true, "hits": [{"damage": 130.0, "killed": true}]}
+	}).to_utf8_buffer()
 	if success:
 		server.set_target_peer(MultiplayerPeer.TARGET_PEER_BROADCAST)
 		success = server.put_packet(snapshot) == OK
@@ -38,10 +41,15 @@ func _run() -> void:
 			break
 		await process_frame
 	var expected := snapshot.get_string_from_utf8()
+	var parsed_a = JSON.parse_string(received_a)
+	var parsed_b = JSON.parse_string(received_b)
 	print("NETWORK_DIAGNOSTIC connected_a=%s connected_b=%s received_a=%d received_b=%d" % [
 		client_a.get_connection_status(), client_b.get_connection_status(), received_a.length(), received_b.length()
 	])
 	success = success and received_a == expected and received_b == expected
+	success = success and parsed_a is Dictionary and parsed_b is Dictionary
+	if parsed_a is Dictionary and parsed_b is Dictionary:
+		success = success and int(parsed_a.confirm_melee.sequence) == 17 and str(parsed_b.confirm_melee.weapon) == "fire_axe"
 	server.close()
 	client_a.close()
 	client_b.close()

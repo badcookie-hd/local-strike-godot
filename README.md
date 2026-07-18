@@ -10,7 +10,7 @@ Ein eigenstaendiger taktischer 5v5-Shooter fuer Godot 4.7. Das Spiel enthaelt So
 - `START_GAME.cmd` startet Forward+ mit Vulkan und wechselt bei einem Startfehler automatisch zu OpenGL. Es findet Godot im Projekt oder ueber `PATH`.
 - `START_GAME_COMPATIBILITY.cmd` erzwingt den sparsamen OpenGL-Modus.
 - `OPEN_EDITOR.cmd` oeffnet das Projekt im Godot-Editor.
-- `RUN_TESTS.cmd` prueft 17 Ausruestungsobjekte, Ballistik, fuenf Karten, 5v5-Spawns, Sandbox-Werkzeuge, Movement, Interaktionen, Effektlimits, Deathmatch und LAN-Sockets.
+- `RUN_TESTS.cmd` prueft 22 Ausruestungsobjekte, raeumlichen Nahkampf, Ballistik, fuenf Karten, konfigurierbare Sandbox-Spawns, Movement, Interaktionen, Blut- und Effektlimits, Deathmatch und LAN-Sockets.
 
 Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des Repositories. Details stehen in `engine/README.md`.
 
@@ -18,13 +18,14 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 
 - Defusal: Best of 7, Seitenwechsel nach drei Runden, 12 Sekunden Kaufphase, 105 Sekunden Rundenzeit und 35 Sekunden Charge-Timer.
 - Team Deathmatch: acht Minuten oder 40 Kills, freie Ausruestung und Respawns nach drei Sekunden.
-- Sandbox: lokaler Endlosmodus mit freier Ausruestung, unendlicher Munition, optionalem God Mode und frei platzierbaren Bots, Physikobjekten, Waffen, Explosionen und Brawl-Waves.
+- Sandbox: lokaler Endlosmodus mit freier Ausruestung, unendlicher Munition, optionalem God Mode sowie exakt konfigurierbaren Bots, Waffen, Physikobjekten, Explosionen und Brawl-Waves.
 - Solo fuellt beide Teams bis 5v5 mit Bots auf.
 - LAN verwendet ENet auf UDP-Port `27888`; lokale Server werden ueber UDP-Port `27889` gefunden. Direkte IP ist ebenfalls moeglich.
 
 ## Ausstattung
 
-- 14 Waffen inklusive Vanguard Revolver, Whisper SMG, Sentinel Carbine, Hammer Battle Rifle, Cyclone Auto-Shotgun und Bulwark LMG
+- 22 Ausruestungsobjekte: zwoelf Schusswaffen, sechs Nahkampfwaffen und vier Granatentypen
+- Combat Knife, Machete, Baseball Bat, Crowbar, Fire Axe und Sledgehammer mit eigenen Reichweiten, Trefferboegen, leichten und schweren Angriffen
 - Frag-, Rauch-, Flash- und Brandgranaten mit Sprungphysik, Sichtlinien und Flaechenschaden
 - Fuenf Karten: Harbor Yard, Train Depot, Solar Lab, Old Quarter und Frostline Station
 - Kopf-, Torso- und Gliedmassen-Trefferzonen
@@ -38,7 +39,11 @@ Der portable Editor selbst ist wegen GitHubs 100-MB-Dateigrenze nicht Teil des R
 
 ![Sandbox-Werkzeuge auf Old Quarter](docs/sandbox-720p.png)
 
-Sandbox wird im Hauptmenue als dritter Modus gestartet und laeuft bewusst lokal. Das Werkzeugpanel und die freie Ausruestung werden mit `B` geoeffnet. Objekte und Figuren erscheinen am anvisierten Punkt; `RESET WORLD` stellt Karte, Bots und Physikobjekte vollstaendig wieder her.
+![Sandbox-Werkzeugkasten in Forward+ bei 1080p](docs/sandbox-1080p.png)
+
+Sandbox wird im Hauptmenue als dritter Modus gestartet und laeuft bewusst lokal. Das Werkzeugpanel und die freie Ausruestung werden mit `B` geoeffnet. Die Tabs `BOTS`, `WEAPONS` und `WORLD` erlauben die genaue Auswahl von Team, Bot-Typ, Waffe, Verhalten und Anzahl. Waffen koennen direkt ausgeruestet oder am anvisierten Punkt abgelegt werden. Blut, Koerper, NPCs und Waffen lassen sich getrennt entfernen; `RESET WORLD` stellt die Karte vollstaendig wieder her.
+
+Nahkampftreffer verwenden einen raeumlichen Bogen mit Hindernispruefung und Physikimpulsen. Blutige Nahkampfwaffen behalten ihre Verfaerbung beim Fallenlassen und Aufheben. Im Sandbox-Modus bleiben Blutspritzer, Blutlachen und bis zu 24 Ragdolls erhalten, bis sie gereinigt oder wegen eines Effektlimits recycelt werden. Es gibt keine Zerstueckelung.
 
 ## Grafik und Audio
 
@@ -65,17 +70,17 @@ Der aktuelle Physik-Build erreichte auf einer RTX 3070 bei 1920x1080, Profil Hoc
 - `Strg`: ducken
 - `Shift`: sprinten
 - `R`: nachladen
-- Rechtsklick: ADS / Zielfernrohr
+- Rechtsklick: ADS / Zielfernrohr; mit Nahkampfwaffen schwerer Angriff
 - `V`: Feuerart bei Sentinel und Hammer wechseln
-- `G`: nahe Waffe aufnehmen oder aktuelle Schusswaffe fallenlassen
+- `G`: nahe Waffe aufnehmen oder aktuelle Schuss- beziehungsweise Sandbox-Nahkampfwaffe fallenlassen
 - `1`: Primaerwaffe
 - `2`: Sidearm
-- `3`: Messer
+- `3`: zuletzt ausgewaehlte Nahkampfwaffe
 - `4`: Granate
 - `E`: Charge setzen, entschaerfen oder nahe Tuer bedienen
 - `B`: Ausruestungsmenue
-- `F5`: Sandbox-Gegner platzieren
-- `F6`: Sandbox-Verbuendeten platzieren
+- `F5`: Sandbox-Gegner mit dem aktuellen Bot-Preset platzieren
+- `F6`: Sandbox-Verbuendeten mit dem aktuellen Bot-Preset platzieren
 - `F7`: Sandbox-Holzkiste platzieren
 - `F8`: Sandbox-Explosion am Zielpunkt
 - `F9`: Sandbox-Zeitlupe

@@ -7,9 +7,10 @@ signal join_requested(address: String)
 signal refresh_servers_requested
 signal buy_requested(key: String)
 signal quality_changed(index: int)
-signal sandbox_action_requested(action: String, value: bool)
+signal sandbox_action_requested(action: String, payload: Dictionary)
 
 const RadarScript = preload("res://scripts/radar.gd")
+const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
 
 var _root: Control
 var _map_label: Label
@@ -48,6 +49,14 @@ var _sandbox_panel: PanelContainer
 var _sandbox_count_label: Label
 var _sandbox_god_toggle: CheckButton
 var _sandbox_slow_toggle: CheckButton
+var _sandbox_team_select: OptionButton
+var _sandbox_kind_select: OptionButton
+var _sandbox_bot_weapon_select: OptionButton
+var _sandbox_behavior_select: OptionButton
+var _sandbox_bot_count: SpinBox
+var _sandbox_weapon_category: OptionButton
+var _sandbox_weapon_select: OptionButton
+var _sandbox_weapon_count: SpinBox
 var _host_button: Button
 var _buy_buttons: Dictionary = {}
 var _free_loadout_state := false
@@ -197,6 +206,8 @@ func _build_buy_menu() -> void:
 	title.custom_minimum_size.y = 30
 	box.add_child(title)
 	for entry in [
+		["knife", "COMBAT KNIFE", 0], ["machete", "MACHETE", 0], ["baseball_bat", "BASEBALL BAT", 0],
+		["crowbar", "CROWBAR", 0], ["fire_axe", "FIRE AXE", 0], ["sledgehammer", "SLEDGEHAMMER", 0],
 		["sidearm", "SIDEARM", 0], ["vanguard", "VANGUARD REVOLVER", 850], ["smg", "COMPACT SMG", 1250], ["whisper", "WHISPER SMG", 1550],
 		["ranger", "RANGER RIFLE", 2700], ["sentinel", "SENTINEL CARBINE", 2950], ["hammer", "HAMMER BATTLE RIFLE", 3200],
 		["breacher", "BREACHER", 2100], ["cyclone", "CYCLONE AUTO-SHOTGUN", 2850], ["marksman", "MARKSMAN", 3300],
@@ -217,22 +228,18 @@ func _build_sandbox_tools() -> void:
 	_sandbox_panel.anchor_left = 1.0
 	_sandbox_panel.anchor_right = 1.0
 	_sandbox_panel.anchor_bottom = 1.0
-	_sandbox_panel.offset_left = -286
+	_sandbox_panel.offset_left = -350
 	_sandbox_panel.offset_top = 278
 	_sandbox_panel.offset_right = -18
 	_sandbox_panel.offset_bottom = -102
 	_root.add_child(_sandbox_panel)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	_sandbox_panel.add_child(scroll)
 	var margin := MarginContainer.new()
-	margin.custom_minimum_size.x = 246
+	margin.custom_minimum_size.x = 310
 	margin.add_theme_constant_override("margin_left", 10)
 	margin.add_theme_constant_override("margin_right", 10)
 	margin.add_theme_constant_override("margin_top", 10)
 	margin.add_theme_constant_override("margin_bottom", 10)
-	scroll.add_child(margin)
+	_sandbox_panel.add_child(margin)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
 	margin.add_child(box)
@@ -244,22 +251,137 @@ func _build_sandbox_tools() -> void:
 	_sandbox_count_label.add_theme_font_size_override("font_size", 12)
 	_sandbox_count_label.add_theme_color_override("font_color", Color("9fb0b9"))
 	box.add_child(_sandbox_count_label)
-	box.add_child(_sandbox_tool_row([["SPAWN ENEMY", "spawn_enemy"], ["SPAWN ALLY", "spawn_ally"]]))
-	box.add_child(_sandbox_tool_button("SPAWN BRAWL WAVE", "spawn_wave"))
-	box.add_child(_sandbox_tool_row([["WOOD CRATE", "spawn_wood"], ["METAL PROP", "spawn_metal"]]))
-	box.add_child(_sandbox_tool_button("DROP RANDOM WEAPON", "spawn_weapon"))
-	box.add_child(_sandbox_tool_button("FORCE BLAST", "explosion"))
+	var tabs := TabContainer.new()
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.custom_minimum_size.y = 270
+	box.add_child(tabs)
+	var bots := _sandbox_tab(tabs, "BOTS")
+	_sandbox_team_select = _sandbox_option([["ENEMY", "enemy"], ["ALLY", "ally"]])
+	_sandbox_kind_select = _sandbox_option([["ASSAULT", "assault"], ["SCOUT", "scout"], ["HEAVY", "heavy"]])
+	_sandbox_bot_weapon_select = _sandbox_option(_weapon_entries(WeaponCatalog.bot_weapon_keys()))
+	_sandbox_behavior_select = _sandbox_option([["AGGRESSIVE", "aggressive"], ["GUARD", "guard"], ["PASSIVE", "passive"]])
+	_sandbox_bot_count = _sandbox_spin(1, 10, 1)
+	_add_sandbox_field(bots, "TEAM", _sandbox_team_select)
+	_add_sandbox_field(bots, "TYPE", _sandbox_kind_select)
+	_add_sandbox_field(bots, "WEAPON", _sandbox_bot_weapon_select)
+	_add_sandbox_field(bots, "BEHAVIOR", _sandbox_behavior_select)
+	_add_sandbox_field(bots, "COUNT", _sandbox_bot_count)
+	var spawn_bot := _sandbox_tool_button("SPAWN AT CURSOR", "")
+	spawn_bot.pressed.connect(func(): sandbox_action_requested.emit("spawn_bot", get_sandbox_bot_config()))
+	bots.add_child(spawn_bot)
+	bots.add_child(_sandbox_tool_button("SPAWN BRAWL WAVE", "spawn_wave"))
+
+	var weapons := _sandbox_tab(tabs, "WEAPONS")
+	_sandbox_weapon_category = _sandbox_option([["ALL", "all"], ["MELEE", "melee"], ["FIREARMS", "firearms"], ["GRENADES", "grenades"]])
+	_sandbox_weapon_category.item_selected.connect(func(_index: int): _populate_sandbox_weapons())
+	_sandbox_weapon_select = OptionButton.new()
+	_sandbox_weapon_select.custom_minimum_size.y = 34
+	_sandbox_weapon_count = _sandbox_spin(1, 10, 1)
+	_add_sandbox_field(weapons, "CATEGORY", _sandbox_weapon_category)
+	_add_sandbox_field(weapons, "ITEM", _sandbox_weapon_select)
+	_add_sandbox_field(weapons, "COUNT", _sandbox_weapon_count)
+	_populate_sandbox_weapons()
+	var drop_weapon := _sandbox_tool_button("DROP AT CURSOR", "")
+	drop_weapon.pressed.connect(func(): sandbox_action_requested.emit("spawn_weapon", get_sandbox_weapon_config()))
+	weapons.add_child(drop_weapon)
+	var equip_weapon := _sandbox_tool_button("EQUIP NOW", "")
+	equip_weapon.pressed.connect(func():
+		var payload := get_sandbox_weapon_config()
+		payload["count"] = 1
+		sandbox_action_requested.emit("equip_weapon", payload)
+	)
+	weapons.add_child(equip_weapon)
+
+	var world := _sandbox_tab(tabs, "WORLD")
+	world.add_child(_sandbox_tool_row([["WOOD CRATE", "spawn_wood"], ["METAL PROP", "spawn_metal"]]))
+	world.add_child(_sandbox_tool_button("FORCE BLAST", "explosion"))
 	_sandbox_god_toggle = CheckButton.new()
 	_sandbox_god_toggle.text = "GOD MODE"
-	_sandbox_god_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("god_mode", value))
-	box.add_child(_sandbox_god_toggle)
+	_sandbox_god_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("god_mode", {"enabled": value}))
+	world.add_child(_sandbox_god_toggle)
 	_sandbox_slow_toggle = CheckButton.new()
 	_sandbox_slow_toggle.text = "SLOW MOTION"
-	_sandbox_slow_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("slow_motion", value))
-	box.add_child(_sandbox_slow_toggle)
-	box.add_child(_sandbox_tool_button("CLEAR SPAWNED", "clear"))
-	box.add_child(_sandbox_tool_button("RESET WORLD", "reset"))
+	_sandbox_slow_toggle.toggled.connect(func(value: bool): sandbox_action_requested.emit("slow_motion", {"enabled": value}))
+	world.add_child(_sandbox_slow_toggle)
+	world.add_child(_sandbox_tool_button("REMOVE AIMED OBJECT", "remove_target"))
+	world.add_child(_sandbox_tool_row([["CLEAR NPCS", "clear_npcs"], ["CLEAR WEAPONS", "clear_weapons"]]))
+	world.add_child(_sandbox_tool_button("CLEAR BLOOD + BODIES", "clear_blood"))
+	world.add_child(_sandbox_tool_button("CLEAR ALL SPAWNS", "clear"))
+	world.add_child(_sandbox_tool_button("RESET WORLD", "reset"))
 	_sandbox_panel.visible = false
+
+func _sandbox_tab(tabs: TabContainer, title: String) -> VBoxContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = title
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	tabs.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.custom_minimum_size.x = 286
+	content.add_theme_constant_override("separation", 6)
+	scroll.add_child(content)
+	return content
+
+func _sandbox_option(entries: Array) -> OptionButton:
+	var option := OptionButton.new()
+	option.custom_minimum_size.y = 34
+	for entry in entries:
+		option.add_item(str(entry[0]))
+		option.set_item_metadata(option.item_count - 1, str(entry[1]))
+	return option
+
+func _sandbox_spin(minimum: float, maximum: float, value: float) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.step = 1
+	spin.value = value
+	spin.custom_minimum_size.y = 34
+	return spin
+
+func _add_sandbox_field(parent: VBoxContainer, label_text: String, control: Control) -> void:
+	var label := Label.new()
+	label.text = label_text
+	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_color_override("font_color", Color("9fb0b9"))
+	parent.add_child(label)
+	parent.add_child(control)
+
+func _weapon_entries(keys: Array) -> Array:
+	var entries: Array = []
+	for key in keys:
+		entries.append([WeaponCatalog.get_weapon(key).display_name, key])
+	return entries
+
+func _selected_metadata(option: OptionButton) -> String:
+	return str(option.get_item_metadata(option.selected)) if option != null and option.item_count > 0 else ""
+
+func get_sandbox_bot_config(force_team := "") -> Dictionary:
+	return {
+		"team": force_team if not force_team.is_empty() else _selected_metadata(_sandbox_team_select),
+		"kind": _selected_metadata(_sandbox_kind_select),
+		"weapon": _selected_metadata(_sandbox_bot_weapon_select),
+		"behavior": _selected_metadata(_sandbox_behavior_select),
+		"count": clampi(roundi(_sandbox_bot_count.value), 1, 10)
+	}
+
+func get_sandbox_weapon_config() -> Dictionary:
+	return {"weapon": _selected_metadata(_sandbox_weapon_select), "count": clampi(roundi(_sandbox_weapon_count.value), 1, 10)}
+
+func _populate_sandbox_weapons() -> void:
+	if _sandbox_weapon_select == null:
+		return
+	_sandbox_weapon_select.clear()
+	var category := _selected_metadata(_sandbox_weapon_category)
+	for key in WeaponCatalog.sandbox_weapon_keys():
+		var spec := WeaponCatalog.get_weapon(key)
+		var include := category == "all"
+		include = include or (category == "melee" and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE)
+		include = include or (category == "firearms" and spec.slot in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY])
+		include = include or (category == "grenades" and spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE)
+		if include:
+			_sandbox_weapon_select.add_item(spec.display_name)
+			_sandbox_weapon_select.set_item_metadata(_sandbox_weapon_select.item_count - 1, key)
 
 func _sandbox_tool_row(entries: Array) -> HBoxContainer:
 	var row := HBoxContainer.new()
@@ -274,7 +396,8 @@ func _sandbox_tool_button(label: String, action: String) -> Button:
 	var button := Button.new()
 	button.text = label
 	button.custom_minimum_size.y = 36
-	button.pressed.connect(func(): sandbox_action_requested.emit(action, true))
+	if not action.is_empty():
+		button.pressed.connect(func(): sandbox_action_requested.emit(action, {}))
 	return button
 
 func _build_pause_and_scoreboard() -> void:
@@ -420,7 +543,7 @@ func update_state(data: Dictionary) -> void:
 			var entry: Dictionary = _buy_buttons[key]
 			entry.button.text = "%s    %s" % [entry.name, "FREE" if free_loadout else "$%d" % int(entry.price)]
 	_sandbox_panel.visible = data.get("sandbox_visible", false)
-	_sandbox_count_label.text = "%d NPCS   %d PROPS" % [data.get("sandbox_npcs", 0), data.get("sandbox_props", 0)]
+	_sandbox_count_label.text = "%d NPCS   %d ITEMS   %d BODIES" % [data.get("sandbox_npcs", 0), data.get("sandbox_props", 0), data.get("sandbox_bodies", 0)]
 	_sandbox_god_toggle.set_pressed_no_signal(data.get("sandbox_god", false))
 	_sandbox_slow_toggle.set_pressed_no_signal(data.get("sandbox_slow", false))
 	_spectator_label.visible = data.get("spectating", false)

@@ -3,9 +3,12 @@ extends CharacterBody3D
 
 const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
 const Ballistics = preload("res://scripts/ballistics_manager.gd")
+const MeleeResolver = preload("res://scripts/melee_resolver.gd")
+const WeaponModel = preload("res://scripts/weapon_model.gd")
 
 signal died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String)
 signal shot_fired(origin: Vector3, end: Vector3, hit: bool)
+signal melee_impact(position: Vector3, normal: Vector3, intensity: float, killed: bool)
 
 enum State { PATROL, SEARCH, ENGAGE, OBJECTIVE }
 
@@ -28,6 +31,10 @@ var damage_scale := 1.0
 var preferred_distance := 8.0
 var radius := 0.38
 var weapon_key := "ranger"
+var sandbox_behavior := "aggressive"
+var guard_anchor := Vector3.ZERO
+var guard_radius := 5.0
+var last_hit_context: Dictionary = {}
 
 var _state := State.PATROL
 var _shoot_cooldown := 1.0
@@ -48,12 +55,28 @@ var _left_arm: MeshInstance3D
 var _right_arm: MeshInstance3D
 var _muzzle: Marker3D
 var _walk_phase := 0.0
+var _configured_weapon := ""
+var _held_weapon: Node3D
+var _attack_anim_timer := 0.0
+
+func configure_spawn(next_team: int, kind: String, next_weapon: String, behavior: String, anchor: Vector3) -> void:
+	team = next_team
+	enemy_kind = kind if kind in ["scout", "assault", "heavy"] else "assault"
+	_configured_weapon = next_weapon if WeaponCatalog.all().has(next_weapon) else "sentinel"
+	sandbox_behavior = behavior if behavior in ["aggressive", "guard", "passive"] else "aggressive"
+	guard_anchor = anchor
 
 func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 1
 	add_to_group("damageable_actor")
 	_apply_profile()
+	if not _configured_weapon.is_empty():
+		weapon_key = _configured_weapon
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		preferred_distance = spec.melee_reach * 0.72
+		fire_delay = spec.melee_light_recovery
 	_build_collision()
 	_build_visual()
 	_build_navigation()
@@ -156,19 +179,11 @@ func _build_visual() -> void:
 	_left_arm.rotation_degrees.x = -18.0
 	_right_arm.rotation_degrees.x = -34.0
 
-	var gun := _add_box(_body_root, Vector3(0.13, 0.14, 0.72), Vector3(radius * 0.58, 1.03, -radius * 0.92), visor_material)
-	gun.rotation_degrees.x = 4.0
-	var barrel := MeshInstance3D.new()
-	var barrel_mesh := CylinderMesh.new()
-	barrel_mesh.top_radius = 0.025
-	barrel_mesh.bottom_radius = 0.034
-	barrel_mesh.height = 0.48
-	barrel_mesh.radial_segments = 10
-	barrel.mesh = barrel_mesh
-	barrel.rotation_degrees.x = 90.0
-	barrel.position = Vector3(radius * 0.58, 1.04, -radius * 1.7)
-	barrel.material_override = visor_material
-	_body_root.add_child(barrel)
+	_held_weapon = WeaponModel.create(weapon_key)
+	_held_weapon.position = Vector3(radius * 0.58, 1.03, -radius * 0.92)
+	_held_weapon.scale = Vector3.ONE * (0.76 if WeaponCatalog.get_weapon(weapon_key).slot == LocalStrikeWeaponDefinition.Slot.MELEE else 0.72)
+	_held_weapon.rotation_degrees = Vector3(4.0, 0.0, 0.0)
+	_body_root.add_child(_held_weapon)
 	_muzzle = Marker3D.new()
 	_muzzle.position = Vector3(radius * 0.58, 1.04, -radius * 1.95)
 	_body_root.add_child(_muzzle)
@@ -186,14 +201,24 @@ func _build_navigation() -> void:
 	add_child(_navigation)
 
 func _physics_process(delta: float) -> void:
-	if _dead or not is_instance_valid(target_player):
+	if _dead:
 		return
 	_shoot_cooldown -= delta
+	_attack_anim_timer = maxf(0.0, _attack_anim_timer - delta)
 	_decision_timer -= delta
 	_hurt_timer = maxf(0.0, _hurt_timer - delta)
 	_search_timer = maxf(0.0, _search_timer - delta)
 	if _hurt_timer <= 0.0:
 		_torso_material.emission_enabled = false
+	if sandbox_behavior == "passive":
+		velocity.x = move_toward(velocity.x, 0.0, 10.0 * delta)
+		velocity.z = move_toward(velocity.z, 0.0, 10.0 * delta)
+		velocity.y = velocity.y - 22.0 * delta if not is_on_floor() else -0.5
+		move_and_slide()
+		_animate_body(delta)
+		return
+	if not is_instance_valid(target_player):
+		return
 	if _decision_timer <= 0.0:
 		_decision_timer = randf_range(0.55, 1.25)
 		_select_target()
@@ -218,7 +243,14 @@ func _physics_process(delta: float) -> void:
 
 	var target := _choose_target()
 	var direction := _direction_to_target(target)
-	if _state == State.ENGAGE and distance < preferred_distance + 2.5:
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	var uses_melee := spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE
+	if sandbox_behavior == "guard" and global_position.distance_to(guard_anchor) > guard_radius:
+		direction = _direction_to_target(guard_anchor)
+	elif _state == State.ENGAGE and uses_melee:
+		var melee_direction := Vector3(player_position.x - global_position.x, 0, player_position.z - global_position.z).normalized()
+		direction = melee_direction if distance > spec.melee_reach * 0.72 else Vector3.ZERO
+	elif _state == State.ENGAGE and distance < preferred_distance + 2.5:
 		var player_direction := Vector3(player_position.x - global_position.x, 0, player_position.z - global_position.z).normalized()
 		var strafe := Vector3(-player_direction.z, 0, player_direction.x) * _strafe_sign
 		var retreat := -player_direction if distance < preferred_distance - 1.2 else Vector3.ZERO
@@ -235,8 +267,11 @@ func _physics_process(delta: float) -> void:
 	if global_position.distance_squared_to(look_target) > 0.1:
 		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
 	_animate_body(delta)
-	if sees_player and distance < 28.0 and _reaction_timer >= reaction_time and _shoot_cooldown <= 0.0:
-		_shoot(distance)
+	if sees_player and _reaction_timer >= reaction_time and _shoot_cooldown <= 0.0:
+		if uses_melee and distance <= spec.melee_reach + 0.4:
+			_melee_attack(distance)
+		elif not uses_melee and distance < 28.0:
+			_shoot(distance)
 
 func _choose_target() -> Vector3:
 	match _state:
@@ -297,9 +332,58 @@ func _shoot(distance: float) -> void:
 		end += Vector3(randf_range(-2.2, 2.2), randf_range(-1.1, 1.1), randf_range(-2.2, 2.2))
 	shot_fired.emit(origin, end, hit)
 
-func take_damage(amount: float, hit_zone := "torso") -> bool:
+func _melee_attack(distance: float) -> void:
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	var heavy := distance < spec.melee_reach * 0.58 and randf() < 0.32
+	_shoot_cooldown = spec.melee_heavy_recovery if heavy else spec.melee_light_recovery
+	_attack_anim_timer = _shoot_cooldown
+	var origin := global_position + Vector3.UP * 1.12
+	var direction := (target_player.global_position + Vector3.UP - origin).normalized()
+	var result := MeleeResolver.resolve_attack(get_world_3d().direct_space_state, origin, direction, spec, [get_rid()], heavy)
+	for hit in result.hits:
+		var target: Object = hit.target
+		if not opponents.has(target):
+			continue
+		var context := {"source": "melee", "weapon": weapon_key, "heavy": heavy, "direction": direction, "impulse": hit.impulse, "blood_intensity": hit.blood_intensity}
+		var killed := false
+		if target.has_method("take_damage"):
+			killed = bool(target.take_damage(float(hit.damage) * damage_scale, str(hit.zone), context))
+		elif target.has_method("apply_damage"):
+			target.apply_damage(float(hit.damage) * damage_scale, str(hit.zone), context)
+			killed = float(target.get("health")) <= 0.0
+		if target.has_method("apply_gameplay_impulse"):
+			target.apply_gameplay_impulse(direction * float(hit.impulse), hit.position - target.global_position)
+		_stain_held_weapon(float(hit.blood_intensity) * 0.16)
+		melee_impact.emit(hit.position, hit.normal, float(hit.blood_intensity), killed)
+
+func clear_weapon_blood() -> void:
+	if not is_instance_valid(_held_weapon):
+		return
+	var old_position := _held_weapon.position
+	var old_rotation := _held_weapon.rotation
+	var old_scale := _held_weapon.scale
+	_held_weapon.queue_free()
+	_held_weapon = WeaponModel.create(weapon_key, 0.0)
+	_held_weapon.position = old_position
+	_held_weapon.rotation = old_rotation
+	_held_weapon.scale = old_scale
+	_body_root.add_child(_held_weapon)
+
+func _stain_held_weapon(amount: float) -> void:
+	if not is_instance_valid(_held_weapon):
+		return
+	for child in _held_weapon.get_children():
+		var mesh_instance := child as MeshInstance3D
+		if mesh_instance == null:
+			continue
+		var material := mesh_instance.material_override as StandardMaterial3D
+		if material != null:
+			material.albedo_color = material.albedo_color.lerp(Color("5a1118"), clampf(amount, 0.0, 0.5))
+
+func take_damage(amount: float, hit_zone := "torso", context := {}) -> bool:
 	if _dead:
 		return false
+	last_hit_context = context.duplicate(true) if context is Dictionary else {}
 	health -= amount
 	_hurt_timer = 0.14
 	_search_timer = 4.0
@@ -318,6 +402,10 @@ func take_damage(amount: float, hit_zone := "torso") -> bool:
 		tween.tween_callback(queue_free)
 		return true
 	return false
+
+func apply_gameplay_impulse(impulse: Vector3, _at_position := Vector3.ZERO) -> void:
+	velocity += impulse * (0.12 if enemy_kind == "heavy" else 0.2)
+	velocity.y = maxf(velocity.y, impulse.y * 0.12)
 
 func hear_noise(position: Vector3, loudness := 1.0) -> void:
 	if global_position.distance_to(position) <= 15.0 * loudness and _state != State.ENGAGE:
@@ -357,6 +445,13 @@ func _animate_body(delta: float) -> void:
 	_right_leg.rotation_degrees.x = -swing
 	_left_arm.rotation_degrees.x = -18.0 - swing * 0.38
 	_right_arm.rotation_degrees.x = -34.0 + swing * 0.22
+	if _attack_anim_timer > 0.0:
+		var attack_swing := sin((_attack_anim_timer / maxf(0.01, fire_delay)) * PI) * 72.0
+		_right_arm.rotation_degrees.x -= attack_swing
+		if is_instance_valid(_held_weapon):
+			_held_weapon.rotation_degrees.z = attack_swing * 0.8
+	elif is_instance_valid(_held_weapon):
+		_held_weapon.rotation_degrees.z = lerpf(_held_weapon.rotation_degrees.z, 0.0, minf(1.0, delta * 12.0))
 	_body_root.position.y = absf(sin(_walk_phase * 2.0)) * 0.018 if horizontal_speed > 0.15 else 0.0
 
 func _kind_color() -> Color:

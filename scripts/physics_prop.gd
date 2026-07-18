@@ -43,7 +43,7 @@ func _ready() -> void:
 	physics_material_override = physics_material
 	_build_visual()
 
-func take_damage(amount: float, _zone := "object") -> bool:
+func take_damage(amount: float, _zone := "object", _context := {}) -> bool:
 	if destroyed_state:
 		return false
 	health = maxf(0.0, health - amount)

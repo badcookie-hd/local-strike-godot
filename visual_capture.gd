@@ -25,6 +25,9 @@ func _capture() -> void:
 		game.show_buy = true
 	for frame in range(24):
 		await process_frame
+	game.hud._toast_label.visible = false
+	await process_frame
+	await process_frame
 	var image := root.get_texture().get_image()
 	var error := image.save_png(output_path)
 	if error != OK:

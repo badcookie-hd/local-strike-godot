@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 signal shot_fired(origin: Vector3, end: Vector3, hit: bool, normal: Vector3, surface_type: String, actor_hit: bool)
 signal shot_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, fire_mode: String)
+signal melee_attack_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, heavy: bool)
 signal stats_changed
 signal hit_confirmed(killed: bool)
 signal player_died
@@ -27,6 +28,7 @@ var stamina := 100.0
 var weapon_key := "sidearm"
 var primary_key := ""
 var secondary_key := "sidearm"
+var melee_key := "knife"
 var grenade_key := ""
 var inventory := {"knife": true, "sidearm": true}
 var ammo_state: Dictionary = {}
@@ -36,6 +38,7 @@ var enabled := true
 var authoritative_damage := true
 var invulnerable := false
 var unlimited_ammo := false
+var allow_melee_drop := false
 var helmet := true
 var crouching := false
 var aiming := false
@@ -70,6 +73,12 @@ var _capsule: CapsuleShape3D
 var _shot_sequence := 0
 var _floor_surface := "concrete"
 var _equip_timer := 0.0
+var _melee_anim_timer := 0.0
+var _melee_anim_duration := 0.0
+var _melee_heavy := false
+var _melee_swing_sign := 1.0
+var _base_weapon_color := Color("303943")
+var weapon_blood: Dictionary = {}
 
 func _ready() -> void:
 	collision_layer = 1
@@ -224,6 +233,7 @@ func _physics_process(delta: float) -> void:
 
 	_fire_cooldown = maxf(0.0, _fire_cooldown - delta)
 	_equip_timer = maxf(0.0, _equip_timer - delta)
+	_melee_anim_timer = maxf(0.0, _melee_anim_timer - delta)
 	_muzzle_flash_timer = maxf(0.0, _muzzle_flash_timer - delta)
 	if _muzzle_flash_timer <= 0.0:
 		_muzzle_flash.visible = false
@@ -243,15 +253,21 @@ func _physics_process(delta: float) -> void:
 	elif Input.is_action_just_pressed("select_secondary"):
 		equip_weapon(secondary_key)
 	elif Input.is_action_just_pressed("select_melee"):
-		equip_weapon("knife")
+		equip_weapon(melee_key)
 	elif Input.is_action_just_pressed("select_grenade") and not grenade_key.is_empty():
 		equip_weapon(grenade_key)
 	var current_spec := WeaponCatalog.get_weapon(weapon_key)
 	var mouse_captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	aiming = mouse_captured and Input.is_action_pressed("aim") and current_spec.slot not in [LocalStrikeWeaponDefinition.Slot.MELEE, LocalStrikeWeaponDefinition.Slot.GRENADE]
-	var automatic_fire := fire_mode == "auto" or fire_mode == "pump"
-	if mouse_captured and ((automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire"))):
-		shoot()
+	if current_spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		if mouse_captured and Input.is_action_just_pressed("fire"):
+			melee_attack(false)
+		elif mouse_captured and Input.is_action_just_pressed("aim"):
+			melee_attack(true)
+	else:
+		var automatic_fire := fire_mode == "auto" or fire_mode == "pump"
+		if mouse_captured and ((automatic_fire and Input.is_action_pressed("fire")) or (not automatic_fire and Input.is_action_just_pressed("fire"))):
+			shoot()
 	if Input.is_action_just_pressed("jump"):
 		_jump_buffer_timer = JUMP_BUFFER_TIME
 	else:
@@ -316,17 +332,27 @@ func _physics_process(delta: float) -> void:
 	_weapon_root.position.x = lerpf(_weapon_root.position.x, (0.0 if aiming else 0.34) - _weapon_sway.x, 14.0 * delta)
 	_weapon_root.position.y = lerpf(_weapon_root.position.y, (-0.19 if aiming else -0.28) + bob, 12.0 * delta)
 	_weapon_root.position.z = lerpf(_weapon_root.position.z, -0.72 + absf(_weapon_sway.y) * 0.5, 14.0 * delta)
-	_weapon_root.rotation.z = lerpf(_weapon_root.rotation.z, -input.x * 0.035, 10.0 * delta)
+	var target_rotation := Vector3(0.0, 0.0, -input.x * 0.035)
+	if _melee_anim_timer > 0.0 and _melee_anim_duration > 0.0:
+		var progress := 1.0 - _melee_anim_timer / _melee_anim_duration
+		var swing := sin(progress * PI)
+		target_rotation.x = (-1.05 if _melee_heavy else -0.42) * swing
+		target_rotation.y = _melee_swing_sign * (0.28 if _melee_heavy else 0.52) * swing
+		target_rotation.z = _melee_swing_sign * (0.82 if _melee_heavy else 1.15) * swing
+	_weapon_root.rotation = _weapon_root.rotation.lerp(target_rotation, minf(1.0, 18.0 * delta))
 	stats_changed.emit()
 
 func shoot() -> void:
 	if _fire_cooldown > 0.0 or _reloading or _equip_timer > 0.0:
 		return
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		melee_attack(false)
+		return
 	if ammo <= 0 and not unlimited_ammo:
 		begin_reload()
 		return
 
-	var spec := WeaponCatalog.get_weapon(weapon_key)
 	_shot_sequence += 1
 	if not unlimited_ammo:
 		ammo -= 1
@@ -387,6 +413,26 @@ func shoot() -> void:
 	if ammo <= 0 and not unlimited_ammo:
 		begin_reload()
 
+func melee_attack(heavy: bool) -> void:
+	if _fire_cooldown > 0.0 or _reloading or _equip_timer > 0.0:
+		return
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if spec.slot != LocalStrikeWeaponDefinition.Slot.MELEE:
+		return
+	_shot_sequence += 1
+	_fire_cooldown = spec.melee_heavy_recovery if heavy else spec.melee_light_recovery
+	_melee_anim_duration = _fire_cooldown
+	_melee_anim_timer = _melee_anim_duration
+	_melee_heavy = heavy
+	_melee_swing_sign *= -1.0
+	melee_attack_requested.emit(_shot_sequence, get_aim_origin(), get_aim_direction(), weapon_key, heavy)
+	stats_changed.emit()
+
+func confirm_melee_hit(killed: bool, blood_amount: float) -> void:
+	weapon_blood[weapon_key] = clampf(float(weapon_blood.get(weapon_key, 0.0)) + blood_amount, 0.0, 1.0)
+	_apply_weapon_blood()
+	hit_confirmed.emit(killed)
+
 func cycle_fire_mode() -> void:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
 	if spec.fire_modes.size() < 2:
@@ -398,26 +444,34 @@ func cycle_fire_mode() -> void:
 func get_fire_mode() -> String:
 	return fire_mode.to_upper()
 
-func pickup_weapon(key: String, current_ammo: int, reserve: int) -> void:
+func pickup_weapon(key: String, current_ammo: int, reserve: int, bloodiness := 0.0) -> void:
 	grant_weapon(key)
 	ammo = current_ammo
 	reserve_ammo = reserve
+	weapon_blood[key] = clampf(bloodiness, 0.0, 1.0)
 	ammo_state[key] = {"ammo": ammo, "reserve": reserve_ammo}
+	_apply_weapon_blood()
 	stats_changed.emit()
 
 func remove_current_weapon_for_drop() -> Dictionary:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
-	if spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY]:
+	if spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY] and not (allow_melee_drop and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE):
 		return {}
-	var dropped := {"key": weapon_key, "ammo": ammo, "reserve": reserve_ammo}
+	var dropped := {"key": weapon_key, "ammo": ammo, "reserve": reserve_ammo, "bloodiness": float(weapon_blood.get(weapon_key, 0.0))}
 	inventory.erase(weapon_key)
 	if spec.slot == LocalStrikeWeaponDefinition.Slot.PRIMARY:
 		primary_key = ""
-	else:
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
 		secondary_key = "sidearm"
 		if not inventory.has("sidearm"):
 			inventory["sidearm"] = true
 			ammo_state["sidearm"] = {"ammo": 12, "reserve": 36}
+	else:
+		melee_key = "knife"
+		inventory["knife"] = true
+		ammo_state["knife"] = {"ammo": 1, "reserve": 0}
+		equip_weapon("knife", false)
+		return dropped
 	equip_weapon(primary_key if not primary_key.is_empty() else secondary_key, false)
 	return dropped
 
@@ -497,6 +551,8 @@ func try_buy(key: String, buy_open: bool) -> String:
 		primary_key = key
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
 		secondary_key = key
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		melee_key = key
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE:
 		grenade_key = key
 	equip_weapon(key, false)
@@ -515,12 +571,14 @@ func grant_weapon(key: String) -> String:
 		primary_key = key
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
 		secondary_key = key
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		melee_key = key
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE:
 		grenade_key = key
 	equip_weapon(key, false)
 	return "%s equipped" % spec.display_name
 
-func apply_damage(amount: float, hit_zone := "torso") -> void:
+func apply_damage(amount: float, hit_zone := "torso", _context := {}) -> void:
 	if health <= 0.0 or invulnerable:
 		return
 	var armor_ratio := 0.0 if hit_zone == "limb" else (0.58 if hit_zone != "head" or helmet else 0.0)
@@ -540,6 +598,10 @@ func apply_confirmed_damage(amount: float) -> void:
 	stats_changed.emit()
 	if health <= 0.0:
 		player_died.emit()
+
+func apply_gameplay_impulse(impulse: Vector3, _at_position := Vector3.ZERO) -> void:
+	velocity += impulse * 0.18
+	velocity.y = maxf(velocity.y, impulse.y * 0.12)
 
 func add_reward(amount: int) -> void:
 	money += amount
@@ -593,7 +655,28 @@ func equip_weapon(key: String, store_current := true) -> void:
 	reserve_ammo = state.reserve
 	_reloading = false
 	_update_weapon_visual(spec)
+	_apply_weapon_blood()
 	stats_changed.emit()
+
+func clear_weapon_blood() -> void:
+	weapon_blood.clear()
+	_apply_weapon_blood()
+
+func set_extended_melee_enabled(value: bool) -> void:
+	allow_melee_drop = value
+	if value:
+		return
+	for key in WeaponCatalog.melee_keys():
+		if key != "knife":
+			inventory.erase(key)
+			ammo_state.erase(key)
+			weapon_blood.erase(key)
+	melee_key = "knife"
+	inventory["knife"] = true
+	if not ammo_state.has("knife"):
+		ammo_state["knife"] = {"ammo": 1, "reserve": 0}
+	if WeaponCatalog.get_weapon(weapon_key).slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		equip_weapon("knife", false)
 
 func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 	if _weapon_body == null:
@@ -613,19 +696,46 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 	_grip.position = Vector3(0, -0.16, -0.05)
 	_sight.position = Vector3(0, 0.115, -0.16)
 	_accent.position = Vector3(0.11, 0.045, -0.22)
+	_weapon_body.visible = true
 	_barrel.visible = true
 	_grip.visible = true
 	_sight.visible = true
 	_accent.visible = true
 	_left_hand.visible = true
 	_right_hand.visible = true
+	barrel_mesh.top_radius = 0.038
+	barrel_mesh.bottom_radius = 0.048
 	body_material.albedo_color = Color("303943")
 	match spec.category:
-		"melee":
-			body_mesh.size = Vector3(0.055, 0.055, 0.82)
-			_weapon_body.position = Vector3(0, 0.02, -0.22)
+		"knife", "machete":
+			body_mesh.size = Vector3(0.065 if spec.category == "knife" else 0.12, 0.045, 0.68 if spec.category == "knife" else 0.92)
+			_weapon_body.position = Vector3(0, 0.02, -0.28)
+			grip_mesh.size = Vector3(0.13, 0.1, 0.3)
+			_grip.position = Vector3(0, -0.01, 0.28)
 			body_material.albedo_color = Color("9eabb2")
 			_barrel.visible = false
+			_sight.visible = false
+			_accent.visible = false
+		"baseball_bat", "crowbar":
+			_weapon_body.visible = false
+			barrel_mesh.height = 1.08
+			barrel_mesh.top_radius = 0.09 if spec.category == "baseball_bat" else 0.045
+			barrel_mesh.bottom_radius = 0.055 if spec.category == "baseball_bat" else 0.045
+			_barrel.position = Vector3(0, 0, -0.28)
+			body_material.albedo_color = Color("7a4a2d") if spec.category == "baseball_bat" else Color("a52b31")
+			_grip.visible = false
+			_sight.visible = false
+			_accent.visible = spec.category == "crowbar"
+			_accent.position = Vector3(0.11, 0, -0.78)
+		"fire_axe", "sledgehammer":
+			body_mesh.size = Vector3(0.46, 0.13 if spec.category == "fire_axe" else 0.25, 0.24)
+			_weapon_body.position = Vector3(0, 0, -0.78)
+			barrel_mesh.height = 1.05
+			barrel_mesh.top_radius = 0.048
+			barrel_mesh.bottom_radius = 0.055
+			_barrel.position = Vector3(0, 0, -0.28)
+			body_material.albedo_color = Color("8f999e")
+			_grip.visible = false
 			_sight.visible = false
 			_accent.visible = false
 		"pistol", "revolver":
@@ -663,3 +773,14 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			grip_mesh.size = Vector3(0.12, 0.3, 0.16)
 			_sight.position = Vector3(0, 0.115, -0.16)
 	_muzzle.position = spec.muzzle_offset
+	_base_weapon_color = body_material.albedo_color
+	_apply_weapon_blood()
+
+func _apply_weapon_blood() -> void:
+	if _weapon_body == null:
+		return
+	var material := _weapon_body.material_override as StandardMaterial3D
+	if material == null:
+		return
+	var bloodiness := clampf(float(weapon_blood.get(weapon_key, 0.0)), 0.0, 1.0)
+	material.albedo_color = _base_weapon_color.lerp(Color("5a1118"), bloodiness * 0.68)

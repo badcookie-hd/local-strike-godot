@@ -41,6 +41,16 @@ enum Slot { MELEE, PRIMARY, SECONDARY, GRENADE }
 @export var surface_profile := "metal"
 @export var muzzle_offset := Vector3(0, 0, -0.78)
 @export var view_scale := Vector3.ONE
+@export var melee_type := ""
+@export var melee_reach := 0.0
+@export var melee_arc_degrees := 0.0
+@export var melee_light_damage := 0.0
+@export var melee_heavy_damage := 0.0
+@export var melee_light_recovery := 0.0
+@export var melee_heavy_recovery := 0.0
+@export var melee_max_targets := 1
+@export var melee_impulse := 0.0
+@export var blood_multiplier := 1.0
 
 static func create(data: Dictionary) -> LocalStrikeWeaponDefinition:
 	var weapon := LocalStrikeWeaponDefinition.new()

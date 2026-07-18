@@ -66,7 +66,7 @@ func interact() -> bool:
 	_bump_revision()
 	return true
 
-func take_damage(amount: float, _hit_zone := "object") -> bool:
+func take_damage(amount: float, _hit_zone := "object", _context := {}) -> bool:
 	if destroyed or kind == Kind.DOOR:
 		return false
 	health = maxf(0.0, health - amount)

@@ -51,7 +51,7 @@ func apply_snapshot(position: Vector3, yaw: float, next_health: float, next_weap
 	health = next_health
 	weapon_name = next_weapon
 
-func take_damage(amount: float, hit_zone := "torso") -> bool:
+func take_damage(amount: float, hit_zone := "torso", _context := {}) -> bool:
 	return take_ballistic_damage(amount, hit_zone, 0.0)
 
 func take_ballistic_damage(amount: float, hit_zone: String, armor_penetration: float) -> bool:
@@ -68,8 +68,11 @@ func take_ballistic_damage(amount: float, hit_zone: String, armor_penetration: f
 		return true
 	return false
 
-func apply_damage(amount: float, hit_zone := "torso") -> void:
-	take_damage(amount, hit_zone)
+func apply_damage(amount: float, hit_zone := "torso", context := {}) -> void:
+	take_damage(amount, hit_zone, context)
+
+func apply_gameplay_impulse(impulse: Vector3, _at_position := Vector3.ZERO) -> void:
+	target_position += impulse * 0.035
 
 func _build_collision() -> void:
 	var collision := CollisionShape3D.new()
