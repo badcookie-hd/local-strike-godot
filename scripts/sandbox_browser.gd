@@ -26,6 +26,7 @@ var _tool_button: Button
 var _overlay: ColorRect
 var _search: LineEdit
 var _category_buttons: Dictionary = {}
+var _card_buttons: Dictionary = {}
 var _grid: GridContainer
 var _detail_title: Label
 var _detail_description: Label
@@ -53,6 +54,20 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_on_viewport_resized)
 	set_sandbox_active(false)
 
+func _input(event: InputEvent) -> void:
+	if not _active or not event is InputEventKey:
+		return
+	var key_event := event as InputEventKey
+	if not key_event.pressed or key_event.echo:
+		return
+	var pressed_key := key_event.keycode if key_event.keycode != KEY_NONE else key_event.physical_keycode
+	if pressed_key == KEY_B:
+		toggle_browser()
+		get_viewport().set_input_as_handled()
+	elif pressed_key == KEY_ESCAPE and is_open():
+		close_browser()
+		get_viewport().set_input_as_handled()
+
 func set_sandbox_active(value: bool) -> void:
 	_active = value
 	_tool_button.visible = value
@@ -77,7 +92,7 @@ func open_browser() -> void:
 		return
 	_overlay.visible = true
 	_tool_button.visible = false
-	_quickbar_panel.visible = false
+	_quickbar_panel.visible = not _recent.is_empty()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_search.grab_focus()
 	_rebuild_cards()
@@ -88,7 +103,7 @@ func close_browser() -> void:
 		return
 	_overlay.visible = false
 	_tool_button.visible = _active
-	_quickbar_panel.visible = _active and not _recent.is_empty()
+	_quickbar_panel.visible = false
 	if _active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	browser_visibility_changed.emit(false)
@@ -141,7 +156,6 @@ func _build_ui() -> void:
 	_tool_button.pressed.connect(open_browser)
 	_root.add_child(_tool_button)
 
-	_build_quickbar()
 	_build_placement_banner()
 
 	_overlay = ColorRect.new()
@@ -163,6 +177,8 @@ func _build_ui() -> void:
 	outer.add_child(shell)
 	shell.add_child(_build_header())
 	shell.add_child(_build_category_bar())
+	_build_quickbar()
+	shell.add_child(_quickbar_panel)
 
 	var content := HSplitContainer.new()
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -226,7 +242,7 @@ func _build_category_bar() -> Control:
 		button.button_pressed = category == _selected_category
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.custom_minimum_size.y = 38
-		button.pressed.connect(func(): _select_category(category))
+		button.pressed.connect(_select_category.bind(category))
 		row.add_child(button)
 		_category_buttons[category] = button
 	column.add_child(row)
@@ -316,16 +332,9 @@ func _build_detail_panel() -> Control:
 
 func _build_quickbar() -> void:
 	_quickbar_panel = PanelContainer.new()
-	_quickbar_panel.anchor_left = 0.5
-	_quickbar_panel.anchor_right = 0.5
-	_quickbar_panel.anchor_top = 1.0
-	_quickbar_panel.anchor_bottom = 1.0
-	_quickbar_panel.offset_left = -330
-	_quickbar_panel.offset_right = 330
-	_quickbar_panel.offset_top = -157
-	_quickbar_panel.offset_bottom = -102
+	_quickbar_panel.custom_minimum_size.y = 52
+	_quickbar_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_quickbar_panel.add_theme_stylebox_override("panel", _style(Color(0.035, 0.055, 0.062, 0.92), Color("2c4148"), 1, 5))
-	_root.add_child(_quickbar_panel)
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 6)
 	margin.add_theme_constant_override("margin_right", 6)
@@ -366,7 +375,9 @@ func _rebuild_cards() -> void:
 	if _grid == null:
 		return
 	for child in _grid.get_children():
+		_grid.remove_child(child)
 		child.queue_free()
+	_card_buttons.clear()
 	var viewport_width := get_viewport().get_visible_rect().size.x
 	_grid.columns = 4 if viewport_width >= 1700 else (3 if viewport_width >= 1080 else 2)
 	var needle := _search.text.strip_edges().to_lower() if _search != null else ""
@@ -385,7 +396,8 @@ func _rebuild_cards() -> void:
 		card.add_theme_stylebox_override("normal", _style(Color("182228"), Color("2b3c43"), 1, 5))
 		card.add_theme_stylebox_override("hover", _style(Color("23343a"), Color("56d8c5"), 2, 5))
 		card.add_theme_stylebox_override("pressed", _style(Color("17443c"), Color("7ff1de"), 2, 5))
-		card.pressed.connect(func(): _select_definition(definition))
+		card.pressed.connect(_select_definition.bind(definition))
+		_card_buttons[definition.id] = card
 		var card_margin := MarginContainer.new()
 		card_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		card_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -472,6 +484,7 @@ func _add_recent(item_id: StringName) -> void:
 	if _recent.size() > 8:
 		_recent.resize(8)
 	for child in _quickbar.get_children():
+		_quickbar.remove_child(child)
 		child.queue_free()
 	for recent_id in _recent:
 		var definition := _find_item(recent_id)
@@ -482,9 +495,9 @@ func _add_recent(item_id: StringName) -> void:
 		button.tooltip_text = definition.description
 		button.custom_minimum_size = Vector2(76, 40)
 		button.add_theme_font_size_override("font_size", 10)
-		button.pressed.connect(func(): _quick_activate(definition))
+		button.pressed.connect(_quick_activate.bind(definition))
 		_quickbar.add_child(button)
-	_quickbar_panel.visible = _active and not is_open()
+	_quickbar_panel.visible = _active and is_open() and not _recent.is_empty()
 
 func _quick_activate(definition: LocalStrikeSandboxItemDefinition) -> void:
 	_select_definition(definition)

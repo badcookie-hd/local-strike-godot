@@ -17,6 +17,7 @@ func configure(definition: LocalStrikeSandboxItemDefinition) -> void:
 	_viewport.size = Vector2i(320, 152)
 	_viewport.transparent_bg = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.gui_disable_input = true
 	_viewport.world_3d = World3D.new()
 	add_child(_viewport)
 

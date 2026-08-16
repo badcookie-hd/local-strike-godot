@@ -27,6 +27,10 @@ echo Running LAN socket tests...
 "%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://network_socket_test.gd
 if errorlevel 1 goto failed
 
+echo Running LAN gameplay synchronization tests...
+"%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://network_gameplay_test.gd
+if errorlevel 1 goto failed
+
 echo All Local Strike tests passed.
 exit /b 0
 

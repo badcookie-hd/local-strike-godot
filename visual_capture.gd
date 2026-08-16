@@ -37,4 +37,7 @@ func _capture() -> void:
 		quit(1)
 		return
 	print("VISUAL_CAPTURE_OK %s" % output_path)
+	game.queue_free()
+	for _frame in range(6):
+		await process_frame
 	quit(0)

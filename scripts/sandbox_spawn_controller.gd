@@ -132,16 +132,36 @@ func _validate_placement(origin: Vector3) -> bool:
 	for index in range(count):
 		var local_offset := _formation_offset(index, count)
 		var rotated_offset := Basis(Vector3.UP, placement_rotation) * local_offset
+		var placement_point := origin + rotated_offset
+		if bool(active_definition.placement_rules.get("requires_floor", true)) and not _has_floor_support(placement_point):
+			return false
+		if bool(active_definition.placement_rules.get("requires_navigation", false)) and not _is_on_navigation(placement_point):
+			return false
 		var shape := BoxShape3D.new()
 		shape.size = active_definition.preview_size * Vector3(0.82, 0.86, 0.82)
 		var query := PhysicsShapeQueryParameters3D.new()
 		query.shape = shape
-		query.transform = Transform3D(Basis.IDENTITY, origin + rotated_offset + Vector3.UP * maxf(0.0, active_definition.preview_size.y * 0.5 - active_definition.placement_height))
+		query.transform = Transform3D(Basis.IDENTITY, placement_point + Vector3.UP * maxf(0.0, active_definition.preview_size.y * 0.5 - active_definition.placement_height))
 		query.exclude = [player.get_rid()]
 		query.collision_mask = 3
 		if not get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty():
 			return false
 	return true
+
+func _has_floor_support(point: Vector3) -> bool:
+	var ray := PhysicsRayQueryParameters3D.create(point + Vector3.UP * 0.35, point + Vector3.DOWN * 0.8)
+	ray.exclude = [player.get_rid()]
+	ray.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(ray)
+	return not hit.is_empty() and hit.get("normal", Vector3.UP).dot(Vector3.UP) >= 0.66
+
+func _is_on_navigation(point: Vector3) -> bool:
+	var navigation_map := get_world_3d().navigation_map
+	if not navigation_map.is_valid():
+		return false
+	var closest := NavigationServer3D.map_get_closest_point(navigation_map, point)
+	var horizontal_distance := Vector2(closest.x, closest.z).distance_to(Vector2(point.x, point.z))
+	return horizontal_distance <= 0.72 and absf(closest.y - point.y) <= 1.0
 
 func _rebuild_preview() -> void:
 	_clear_preview()

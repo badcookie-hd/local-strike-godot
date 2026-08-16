@@ -8,6 +8,7 @@ signal stats_changed
 signal hit_confirmed(killed: bool)
 signal player_died
 signal grenade_thrown(origin: Vector3, impulse: Vector3, grenade_kind: String)
+signal reload_requested(weapon_key: String)
 signal damage_taken(amount: float)
 signal footstep(position: Vector3)
 
@@ -85,7 +86,7 @@ var weapon_blood: Dictionary = {}
 
 func _ready() -> void:
 	collision_layer = 1
-	collision_mask = 1
+	collision_mask = 3
 	add_to_group("damageable_actor")
 	_build_body()
 	_initialize_inventory()
@@ -237,7 +238,7 @@ func _input(event: InputEvent) -> void:
 		rotation.y = _yaw
 		_camera.rotation.x = _pitch
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		if not combat_input_blocked and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _initialize_inventory() -> void:
@@ -477,22 +478,22 @@ func remove_current_weapon_for_drop() -> Dictionary:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
 	if spec.slot not in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY] and not (allow_melee_drop and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE):
 		return {}
+	if weapon_key == "knife":
+		return {}
 	var dropped := {"key": weapon_key, "ammo": ammo, "reserve": reserve_ammo, "bloodiness": float(weapon_blood.get(weapon_key, 0.0))}
 	inventory.erase(weapon_key)
 	if spec.slot == LocalStrikeWeaponDefinition.Slot.PRIMARY:
 		primary_key = ""
 	elif spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
-		secondary_key = "sidearm"
-		if not inventory.has("sidearm"):
-			inventory["sidearm"] = true
-			ammo_state["sidearm"] = {"ammo": 12, "reserve": 36}
+		secondary_key = ""
 	else:
 		melee_key = "knife"
 		inventory["knife"] = true
 		ammo_state["knife"] = {"ammo": 1, "reserve": 0}
 		equip_weapon("knife", false)
 		return dropped
-	equip_weapon(primary_key if not primary_key.is_empty() else secondary_key, false)
+	var fallback := primary_key if not primary_key.is_empty() else (secondary_key if not secondary_key.is_empty() else melee_key)
+	equip_weapon(fallback, false)
 	return dropped
 
 func _can_stand() -> bool:
@@ -542,6 +543,7 @@ func begin_reload() -> void:
 		return
 	_reloading = true
 	_reload_timer = spec.reload_time
+	reload_requested.emit(weapon_key)
 
 func _finish_reload() -> void:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
@@ -644,6 +646,14 @@ func reset_for_round(spawn_position: Vector3) -> void:
 	_jump_buffer_timer = 0.0
 	_landing_kick = 0.0
 	stats_changed.emit()
+
+func reset_view(yaw := 0.0, pitch := 0.0) -> void:
+	_yaw = yaw
+	_pitch = clampf(pitch, -1.35, 1.35)
+	rotation.y = _yaw
+	if _camera != null:
+		_camera.rotation.x = _pitch
+	_weapon_sway = Vector2.ZERO
 
 func get_weapon_name() -> String:
 	return WeaponCatalog.get_weapon(weapon_key).display_name

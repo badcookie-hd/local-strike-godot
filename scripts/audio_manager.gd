@@ -46,6 +46,15 @@ func play_ui() -> void:
 	player.finished.connect(player.queue_free)
 	player.play()
 
+func stop_all(clear_cache := false) -> void:
+	for child in get_children():
+		if child is AudioStreamPlayer or child is AudioStreamPlayer3D:
+			child.stop()
+			remove_child(child)
+			child.queue_free()
+	if clear_cache:
+		_cache.clear()
+
 func _play_3d(stream: AudioStream, position: Vector3, volume_db: float, max_distance: float) -> void:
 	var player := AudioStreamPlayer3D.new()
 	player.stream = stream

@@ -534,11 +534,14 @@ func show_server(server: Dictionary) -> void:
 		_server_list.set_item_text(existing, label)
 
 func update_state(data: Dictionary) -> void:
+	var sandbox_mode: bool = data.get("sandbox_mode", false)
 	_map_label.text = "MAP %d/%d\n%s" % [data.map_index + 1, data.get("map_count", 5), data.map_name]
 	_phase_label.text = data.phase
 	_timer_label.text = data.time
 	_score_label.text = "%d : %d" % [data.attack_score, data.defense_score]
 	_money_label.text = data.get("money_text", "$%d" % data.money)
+	_score_label.visible = not sandbox_mode
+	_money_label.visible = not sandbox_mode
 	_health_label.text = "HP %d    ARMOR %d" % [ceili(data.health), ceili(data.armor)]
 	_weapon_label.text = data.weapon
 	_ammo_label.text = data.ammo

@@ -36,6 +36,7 @@ func _run() -> void:
 	_check(game.current_level.sites.size() == 2, "map keeps two bomb sites")
 	_check(game.interactables.size() == 4, "map spawns door, glass, lamp and fuel")
 	_check(game.physics_props.size() >= 2, "map spawns gameplay physics props")
+	_check((game.player.collision_mask & 2) != 0 and (game.enemies[0].collision_mask & 1) != 0, "players and bots physically collide instead of passing through each other")
 	game.player.grant_weapon("sentinel")
 	var first_mode: String = game.player.fire_mode
 	game.player.cycle_fire_mode()
@@ -73,13 +74,36 @@ func _run() -> void:
 	game.sandbox_browser._tool_button.pressed.emit()
 	await process_frame
 	_check(game.sandbox_browser.is_open(), "visible toolbox button opens the spawn browser")
+	_check(game.player.combat_input_blocked and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE, "open browser releases the mouse and blocks combat input")
+	var ui_click := InputEventMouseButton.new()
+	ui_click.button_index = MOUSE_BUTTON_LEFT
+	ui_click.pressed = true
+	game.player._input(ui_click)
+	_check(Input.mouse_mode == Input.MOUSE_MODE_VISIBLE, "player input does not recapture clicks intended for browser controls")
+	await _click_control(game.sandbox_browser._category_buttons["Melee"])
+	_check(game.sandbox_browser._selected_category == "Melee" and game.sandbox_browser._selected.category == "Melee", "category buttons select their own bound browser category")
+	var close_key := InputEventKey.new()
+	close_key.keycode = KEY_B
+	close_key.pressed = true
+	game.sandbox_browser._input(close_key)
+	_check(not game.sandbox_browser.is_open(), "B closes the browser even while the search field owns focus")
+	var open_key := InputEventKey.new()
+	open_key.physical_keycode = KEY_B
+	open_key.pressed = true
+	game.sandbox_browser._input(open_key)
+	_check(game.sandbox_browser.is_open() and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE, "B opens the browser from the captured FPS view")
 	_check(game.sandbox_browser.get_weapon_card_count() == 22, "spawn browser exposes all 22 equipment items")
 	_check(game.sandbox_browser.get_item_count() == 39, "spawn browser catalog includes bots, equipment, props and world tools")
-	_check(game.sandbox_browser.select_item_by_id(&"weapon_fire_axe"), "specific melee card can be selected")
-	await process_frame
+	_check(game.sandbox_browser._card_buttons.has(&"weapon_fire_axe"), "specific melee card is rendered")
+	await _click_control(game.sandbox_browser._card_buttons[&"weapon_fire_axe"])
+	_check(game.sandbox_browser._selected.id == &"weapon_fire_axe", "clicking a weapon card selects that exact weapon")
 	_check(game.sandbox_browser._primary_action.is_visible_in_tree() and game.sandbox_browser._secondary_action.is_visible_in_tree() and game.sandbox_browser._primary_action.get_global_rect().end.y <= root.size.y and game.sandbox_browser._secondary_action.get_global_rect().end.y <= root.size.y, "browser action buttons remain visible at 1280x720")
-	game.sandbox_browser._activate_secondary()
+	_check(not game.hud._score_label.visible and not game.hud._money_label.visible, "sandbox HUD removes duplicate score and money labels")
+	await _click_control(game.sandbox_browser._secondary_action)
 	_check(game.player.weapon_key == "fire_axe" and game.player.melee_key == "fire_axe", "browser equips the exact selected melee weapon")
+	_check(game.sandbox_browser._quickbar_panel.visible and game.sandbox_browser._overlay.is_ancestor_of(game.sandbox_browser._quickbar_panel), "recent items stay clickable inside the open browser")
+	_check(game.sandbox_browser._quickbar_panel.get_global_rect().end.y <= root.size.y, "recent item bar remains inside the 720p viewport")
+	_check(game.sandbox_browser._primary_action.get_global_rect().end.y <= root.size.y and game.sandbox_browser._secondary_action.get_global_rect().end.y <= root.size.y, "recent items never push browser actions below the 720p viewport")
 	game.sandbox_browser._select_category("Weapons")
 	game.sandbox_browser._search.text = "ranger"
 	game.sandbox_browser._rebuild_cards()
@@ -91,13 +115,26 @@ func _run() -> void:
 	game.player.shoot()
 	_check(game.player.grenade_key == "flash" and game.player.ammo == 1, "sandbox grenades are reusable")
 	var base_prop_count: int = game.physics_props.size()
+	game.sandbox_browser.select_item_by_id(&"prop_wood_crate")
+	game.sandbox_spawn_controller.begin_placement(game.sandbox_browser._selected, {"count": 1})
+	_check(game.sandbox_spawn_controller._validate_placement(Vector3(-5, 0.575, 5)), "physics props validate on clear Foundry floor")
+	game.sandbox_spawn_controller.cancel_placement(false)
+	game.sandbox_browser.select_item_by_id(&"weapon_ranger")
+	game.sandbox_spawn_controller.begin_placement(game.sandbox_browser._selected, {"count": 1})
+	_check(game.sandbox_spawn_controller._validate_placement(Vector3(-5, 0.28, 5)), "dropped weapons validate on clear Foundry floor")
+	game.sandbox_spawn_controller.cancel_placement(false)
 	game.sandbox_browser.select_item_by_id(&"bot_heavy")
 	game.sandbox_browser._team_select.select(0)
 	_select_option_metadata(game.sandbox_browser._weapon_select, "fire_axe")
 	game.sandbox_browser._behavior_select.select(1)
 	game.sandbox_browser._bot_count.value = 2
-	game.sandbox_browser._activate_primary()
-	_confirm_placement(game.sandbox_spawn_controller, Transform3D(Basis.IDENTITY, Vector3(5, 0.05, 8)))
+	await _click_control(game.sandbox_browser._primary_action)
+	await physics_frame
+	game.sandbox_spawn_controller.update_preview()
+	_check(game.sandbox_spawn_controller.is_placing(), "browser action enters world placement mode")
+	_check(game.sandbox_spawn_controller.placement_valid, "world placement preview is valid on the Foundry floor")
+	await _world_click()
+	await physics_frame
 	game.sandbox_browser.open_browser()
 	game.sandbox_browser.select_item_by_id(&"bot_scout")
 	game.sandbox_browser._team_select.select(1)
@@ -107,12 +144,12 @@ func _run() -> void:
 	game.sandbox_browser._activate_primary()
 	_confirm_placement(game.sandbox_spawn_controller, Transform3D(Basis.IDENTITY, Vector3(-4, 0.05, 7)))
 	_check(game.enemies.size() == 2 and game.allies.size() == 1, "browser placement spawns the requested bot count and teams")
-	var configured_enemy = game.enemies.back()
-	var second_configured_enemy = game.enemies[game.enemies.size() - 2]
-	var configured_ally = game.allies.back()
-	_check(configured_enemy.enemy_kind == "heavy" and configured_enemy.weapon_key == "fire_axe" and configured_enemy.sandbox_behavior == "guard", "enemy bot preserves exact type weapon and guard behavior")
-	_check(configured_enemy.global_position.distance_to(second_configured_enemy.global_position) > 0.3, "multi-spawn uses separated collision-safe positions")
-	_check(configured_ally.enemy_kind == "scout" and configured_ally.weapon_key == "baseball_bat" and configured_ally.sandbox_behavior == "passive", "ally bot preserves exact type weapon and passive behavior")
+	var configured_enemy = game.enemies.back() if game.enemies.size() >= 2 else null
+	var second_configured_enemy = game.enemies[game.enemies.size() - 2] if game.enemies.size() >= 2 else null
+	var configured_ally = game.allies.back() if not game.allies.is_empty() else null
+	_check(configured_enemy != null and configured_enemy.enemy_kind == "heavy" and configured_enemy.weapon_key == "fire_axe" and configured_enemy.sandbox_behavior == "guard", "enemy bot preserves exact type weapon and guard behavior")
+	_check(configured_enemy != null and second_configured_enemy != null and configured_enemy.global_position.distance_to(second_configured_enemy.global_position) > 0.3, "multi-spawn uses separated collision-safe positions")
+	_check(configured_ally != null and configured_ally.enemy_kind == "scout" and configured_ally.weapon_key == "baseball_bat" and configured_ally.sandbox_behavior == "passive", "ally bot preserves exact type weapon and passive behavior")
 	game.sandbox_browser.open_browser()
 	game.sandbox_browser.select_item_by_id(&"prop_wood_crate")
 	game.sandbox_browser._amount_spin.value = 1
@@ -166,6 +203,39 @@ func _run() -> void:
 	game._on_sandbox_action("clear", {})
 	_check(game.enemies.is_empty() and game.allies.is_empty(), "sandbox clear removes spawned actors")
 	_check(game.physics_props.size() == base_prop_count and game.dropped_weapons.is_empty(), "sandbox clear preserves map props and removes spawned items")
+	game.player.grant_weapon("sentinel")
+	var replaced_ammo: int = game.player.ammo
+	var pickup = game._spawn_dropped_weapon("ranger", 17, 44, game.player.global_position + Vector3(0.6, 0.3, 0), Vector3.ZERO)
+	pickup.freeze = true
+	game._handle_authoritative_weapon_action(game.player.global_position, game.player.weapon_key, game.player.ammo, game.player.reserve_ammo, 1)
+	_check(game.player.weapon_key == "ranger", "picking up a nearby world weapon equips it")
+	_check(game.dropped_weapons.size() == 1 and game.dropped_weapons.values()[0].weapon_key == "sentinel" and game.dropped_weapons.values()[0].ammo == replaced_ammo, "weapon pickup drops the replaced gun with its magazine state")
+	game._on_sandbox_action("clear_weapons", {})
+	game.player.grant_weapon("sidearm")
+	var sidearm_drop: Dictionary = game.player.remove_current_weapon_for_drop()
+	_check(sidearm_drop.get("key", "") == "sidearm" and not game.player.inventory.has("sidearm"), "dropping the sidearm does not duplicate a fresh replacement")
+	game.player.grant_weapon("sidearm")
+	game.player.equip_weapon("knife", false)
+	_check(game.player.remove_current_weapon_for_drop().is_empty(), "the default knife cannot be duplicated by dropping it")
+	game._spawn_sandbox_prop_at("barrel", Transform3D(Basis.IDENTITY, Vector3(-5, 0.56, 5)), 1)
+	game._spawn_sandbox_prop_at("wood", Transform3D(Basis.IDENTITY, Vector3(-2.5, 0.575, 5)), 1)
+	await physics_frame
+	var explosive_barrel: LocalStrikePhysicsProp
+	var blast_crate: LocalStrikePhysicsProp
+	for prop in game.physics_props.values():
+		if not str(prop.prop_id).begins_with("sandbox_prop_"):
+			continue
+		if prop.visual_variant == "barrel":
+			explosive_barrel = prop
+		elif prop.visual_variant == "wood":
+			blast_crate = prop
+	var crate_health_before := blast_crate.health if blast_crate != null else 0.0
+	if explosive_barrel != null:
+		explosive_barrel.take_damage(999.0)
+	await physics_frame
+	_check(explosive_barrel != null and explosive_barrel.destroyed_state, "sandbox fuel barrel enters its destroyed state")
+	_check(blast_crate != null and blast_crate.health < crate_health_before, "fuel barrel explosion damages and pushes nearby props")
+	game._on_sandbox_action("clear_props", {})
 	for batch in range(4):
 		game._spawn_sandbox_bot_at({"team": "enemy", "kind": "scout", "weapon": "knife", "behavior": "passive", "count": 10}, Transform3D(Basis.IDENTITY, Vector3(-12 + batch * 7, 0.05, -8 + batch * 2)))
 	_check(game.enemies.size() == 40, "sandbox accepts the complete 40-bot limit")
@@ -187,12 +257,21 @@ func _run() -> void:
 	await physics_frame
 	_check(game.enemies.is_empty() and game.allies.is_empty() and game.physics_props.size() == base_prop_count, "sandbox reset restores the empty Foundry world")
 	_check(is_equal_approx(Engine.time_scale, 1.0), "sandbox reset restores normal time")
+	print("TEST_STAGE map_matrix")
+	for map_index in range(5):
+		game._start_solo(LocalStrikeMatchConfig.Mode.DEATHMATCH, map_index, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+		await physics_frame
+		await physics_frame
+		_check(game.level_index == map_index and game.current_level.map_name == game.levels[map_index].map_name, "map %d loads the requested definition" % (map_index + 1))
+		_check(game.enemies.size() == 5 and game.allies.size() == 4, "map %d supports a complete 5v5 lineup" % (map_index + 1))
+		_check(game.current_level.sites.size() == 2 and game.interactables.size() == 4 and game.physics_props.size() >= 2, "map %d builds objectives, interactions and physics props" % (map_index + 1))
+		_check(game.player.global_position.y > -0.2 and game.player.global_position.distance_to(game.current_level.player_spawn) < 1.5, "map %d keeps the player at a valid spawn" % (map_index + 1))
 	game._start_solo(LocalStrikeMatchConfig.Mode.DEFUSAL, 0, LocalStrikeMatchConfig.Difficulty.RECRUIT)
 	await physics_frame
 	_check(game.player.melee_key == "knife" and not game.player.inventory.has("fire_axe"), "defusal removes extended sandbox melee inventory")
 	game.queue_free()
-	await process_frame
-	await process_frame
+	for _frame in range(8):
+		await process_frame
 	print("TEST_STAGE complete")
 	if _failed:
 		quit(1)
@@ -208,6 +287,39 @@ func _confirm_placement(controller: LocalStrikeSandboxSpawnController, placement
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
 	controller._unhandled_input(click)
+
+func _click_control(control: Control) -> void:
+	await process_frame
+	var center := control.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = center
+	motion.global_position = center
+	Input.parse_input_event(motion)
+	await process_frame
+	for pressed in [true, false]:
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+		click.pressed = pressed
+		click.position = center
+		click.global_position = center
+		Input.parse_input_event(click)
+		await process_frame
+
+func _world_click() -> void:
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.button_mask = MOUSE_BUTTON_MASK_LEFT
+	click.pressed = true
+	click.position = root.size * 0.5
+	click.global_position = click.position
+	Input.parse_input_event(click)
+	await process_frame
+	click = click.duplicate()
+	click.pressed = false
+	click.button_mask = 0
+	Input.parse_input_event(click)
+	await process_frame
 
 func _select_option_metadata(option: OptionButton, value: String) -> void:
 	for index in range(option.item_count):

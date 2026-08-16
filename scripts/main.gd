@@ -39,6 +39,7 @@ var physics_props: Dictionary = {}
 var dropped_weapons: Dictionary = {}
 var enemies: Array[LocalStrikeEnemy] = []
 var allies: Array[LocalStrikeEnemy] = []
+var replicated_bots: Dictionary = {}
 var remote_avatars: Dictionary = {}
 var pending_respawns: Array[Dictionary] = []
 var sandbox_ragdolls: Array[Node3D] = []
@@ -78,13 +79,16 @@ var player_dead := false
 var player_respawn_timer := 0.0
 var deathmatch_timer := 480.0
 var network_sync_timer := 0.0
+var bot_sync_timer := 0.0
 var current_quality := 0
 var player_team := 0
+var network_spawn_slot := 0
 var match_over := false
 var peer_shot_state: Dictionary = {}
 var peer_melee_state: Dictionary = {}
 var prop_sync_timer := 0.0
 var next_drop_id := 1
+var next_network_bot_id := 1
 var sandbox_god_mode := true
 var sandbox_slow_motion := false
 var sandbox_spawn_serial := 0
@@ -117,6 +121,7 @@ func _ready() -> void:
 	player.hit_confirmed.connect(_on_hit_confirmed)
 	player.player_died.connect(_on_player_died)
 	player.grenade_thrown.connect(_on_grenade_thrown)
+	player.reload_requested.connect(_on_player_reload_requested)
 	player.damage_taken.connect(func(_amount: float): hud.show_damage() if hud != null else null)
 	player.footstep.connect(AudioManager.play_footstep)
 	add_child(player)
@@ -253,6 +258,7 @@ func _physics_process(delta: float) -> void:
 
 func _start_solo(mode: int, map_index: int, difficulty: int) -> void:
 	NetworkManager.leave_game()
+	network_spawn_slot = 0
 	var config := LocalStrikeMatchConfig.new()
 	config.mode = mode
 	config.map_index = map_index
@@ -268,6 +274,7 @@ func _start_host(mode: int, map_index: int, difficulty: int) -> void:
 		hud.show_toast("Sandbox is available in local solo play", 3.5)
 		return
 	var config := LocalStrikeMatchConfig.new()
+	network_spawn_slot = 0
 	config.mode = mode
 	config.map_index = map_index
 	config.bot_difficulty = difficulty
@@ -365,8 +372,10 @@ func _reset_round(show_message: bool) -> void:
 			ragdoll.queue_free()
 	sandbox_ragdolls.clear()
 	_load_level(level_index)
-	var spawn_position: Vector3 = current_level.player_spawn if player_team == 0 else current_level.bot_spawns[0]
+	var spawn_position := _player_spawn_for_slot(network_spawn_slot)
 	player.reset_for_round(spawn_position)
+	var spawn_yaw := 0.4 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else (0.0 if player_team == 0 else PI)
+	player.reset_view(spawn_yaw)
 	player.invulnerable = sandbox_god_mode if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else false
 	player.unlimited_ammo = game_mode == LocalStrikeMatchConfig.Mode.SANDBOX
 	player.enabled = started
@@ -380,16 +389,12 @@ func _load_level(index: int) -> void:
 	if sandbox_spawn_controller != null:
 		sandbox_spawn_controller.cancel_placement(false)
 	for child in level_root.get_children():
+		level_root.remove_child(child)
 		child.queue_free()
-	for enemy in enemies:
-		if is_instance_valid(enemy):
-			enemy.queue_free()
 	enemies.clear()
-	for ally in allies:
-		if is_instance_valid(ally):
-			ally.queue_free()
 	allies.clear()
 	remote_avatars.clear()
+	replicated_bots.clear()
 	sites.clear()
 	interactables.clear()
 	physics_props.clear()
@@ -416,38 +421,55 @@ func _load_level(index: int) -> void:
 	_create_interactables()
 	_create_physics_props()
 	_create_reflection_probes()
-	player.reset_for_round(current_level.player_spawn)
+	player.reset_for_round(_player_spawn_for_slot(network_spawn_slot))
 
 func _spawn_teams() -> void:
 	for enemy in enemies:
 		if is_instance_valid(enemy):
+			if enemy.get_parent() != null:
+				enemy.get_parent().remove_child(enemy)
 			enemy.queue_free()
 	enemies.clear()
 	for ally in allies:
 		if is_instance_valid(ally):
+			if ally.get_parent() != null:
+				ally.get_parent().remove_child(ally)
 			ally.queue_free()
 	allies.clear()
+	replicated_bots.clear()
 	if _is_network_client():
 		return
 	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 		_refresh_bot_opponents()
 		return
 	var human_players := 1 + multiplayer.get_peers().size() if NetworkManager.peer != null else 1
-	var ally_count := maxi(0, 5 - human_players)
-	var ally_spawns: Array[Vector3] = []
+	var team_zero_spawns: Array[Vector3] = [current_level.player_spawn]
 	for offset in [Vector3(-1.2, 0, 0.5), Vector3(1.2, 0, 0.5), Vector3(-2.1, 0, 1.3), Vector3(2.1, 0, 1.3)]:
-		ally_spawns.append(current_level.player_spawn + offset)
+		team_zero_spawns.append(current_level.player_spawn + offset)
+	var team_one_spawns: Array[Vector3] = current_level.bot_spawns.duplicate()
+	var own_team_spawns: Array[Vector3] = team_zero_spawns if player_team == 0 else team_one_spawns
+	var opposing_team_spawns: Array[Vector3] = team_one_spawns if player_team == 0 else team_zero_spawns
+	var ally_count := maxi(0, mini(5, own_team_spawns.size()) - human_players)
 	for i in range(ally_count):
-		var own_spawn: Vector3 = ally_spawns[i % ally_spawns.size()] if player_team == 0 else current_level.bot_spawns[(i + 1) % current_level.bot_spawns.size()]
+		var own_spawn: Vector3 = own_team_spawns[(human_players + i) % own_team_spawns.size()]
 		allies.append(_spawn_bot(player_team, i, own_spawn))
-	var defender_count: int = mini(5, current_level.bot_spawns.size())
+	var defender_count: int = mini(5, opposing_team_spawns.size())
 	for i in range(defender_count):
-		var opposing_spawn: Vector3 = current_level.bot_spawns[i] if player_team == 0 else ally_spawns[i % ally_spawns.size()]
+		var opposing_spawn: Vector3 = opposing_team_spawns[i]
 		enemies.append(_spawn_bot(1 - player_team, i, opposing_spawn))
 	_refresh_bot_opponents()
 
+func _player_spawn_for_slot(slot: int) -> Vector3:
+	if player_team == 1 and not current_level.bot_spawns.is_empty():
+		return current_level.bot_spawns[posmod(slot, mini(5, current_level.bot_spawns.size()))]
+	var offsets := [Vector3.ZERO, Vector3(-1.2, 0, 0.5), Vector3(1.2, 0, 0.5), Vector3(-2.1, 0, 1.3), Vector3(2.1, 0, 1.3)]
+	return current_level.player_spawn + offsets[posmod(slot, offsets.size())]
+
 func _spawn_bot(team: int, index: int, position: Vector3, spawn_config := {}) -> LocalStrikeEnemy:
 	var bot: LocalStrikeEnemy = EnemyScript.new()
+	if NetworkManager.peer != null and multiplayer.is_server():
+		bot.network_bot_id = "bot_%d" % next_network_bot_id
+		next_network_bot_id += 1
 	bot.bot_difficulty = bot_difficulty
 	var default_kind := "heavy" if index == 4 else ("scout" if index % 3 == 1 else "assault")
 	var kind := str(spawn_config.get("kind", default_kind))
@@ -662,6 +684,10 @@ func _on_player_shot_requested(sequence: int, origin: Vector3, direction: Vector
 	if _is_network_client():
 		_request_network_shot.rpc_id(1, sequence, origin, direction, weapon_key, mode)
 
+func _on_player_reload_requested(weapon_key: String) -> void:
+	if _is_network_client():
+		_request_network_reload.rpc_id(1, weapon_key)
+
 func _on_player_melee_requested(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, heavy: bool) -> void:
 	if _is_network_client():
 		_request_network_melee.rpc_id(1, sequence, origin, direction, weapon_key, heavy)
@@ -776,6 +802,8 @@ func _update_sandbox(delta: float) -> void:
 func _on_sandbox_browser_visibility_changed(visible: bool) -> void:
 	if game_mode != LocalStrikeMatchConfig.Mode.SANDBOX:
 		return
+	if visible and sandbox_spawn_controller.is_placing():
+		sandbox_spawn_controller.cancel_placement()
 	player.combat_input_blocked = visible or sandbox_spawn_controller.is_placing()
 
 func _on_sandbox_placement_requested(definition: LocalStrikeSandboxItemDefinition, options: Dictionary) -> void:
@@ -1165,7 +1193,7 @@ func _remove_sandbox_target() -> void:
 
 func _respawn_player() -> void:
 	player_dead = false
-	var spawn_position: Vector3 = current_level.player_spawn if player_team == 0 else current_level.bot_spawns[0]
+	var spawn_position := _player_spawn_for_slot(network_spawn_slot)
 	player.reset_for_round(spawn_position)
 	player.enabled = true
 	player.set_view_active(true)
@@ -1246,8 +1274,8 @@ func _on_connection_state_changed(state: String) -> void:
 			_finish_match()
 
 func _on_network_peer_joined(_peer_id: int) -> void:
-	if multiplayer.is_server() and started:
-		_spawn_teams()
+	# The roster registration RPC performs the authoritative bot refill once.
+	pass
 
 func _on_network_peer_left(peer_id: int) -> void:
 	GameSession.remove_player(peer_id)
@@ -1255,6 +1283,8 @@ func _on_network_peer_left(peer_id: int) -> void:
 		remote_avatars[peer_id].queue_free()
 		remote_avatars.erase(peer_id)
 	_refresh_bot_opponents()
+	if multiplayer.is_server() and started:
+		_spawn_teams()
 	_sync_roster.rpc(GameSession.roster)
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -1263,18 +1293,21 @@ func _register_client(player_name: String) -> void:
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	GameSession.register_player(sender, player_name, 0)
-	_receive_match_config.rpc_id(sender, game_mode, level_index, bot_difficulty)
+	var spawn_slot := clampi(GameSession.roster.size() - 1, 0, 4)
+	_spawn_teams()
+	_receive_match_config.rpc_id(sender, game_mode, level_index, bot_difficulty, spawn_slot)
 	_receive_interactable_snapshot.rpc_id(sender, _serialize_interactables())
 	_receive_physics_snapshot.rpc_id(sender, _serialize_physics_state())
+	_receive_bot_snapshot.rpc_id(sender, _serialize_bot_state())
 	_sync_roster.rpc(GameSession.roster)
-	_spawn_teams()
 
 @rpc("authority", "call_remote", "reliable")
-func _receive_match_config(mode: int, map_index: int, difficulty: int) -> void:
+func _receive_match_config(mode: int, map_index: int, difficulty: int, spawn_slot := 0) -> void:
 	var config := LocalStrikeMatchConfig.new()
 	config.mode = mode
 	config.map_index = map_index
 	config.bot_difficulty = difficulty
+	network_spawn_slot = clampi(spawn_slot, 0, 4)
 	GameSession.configure(config)
 	_start_configured_match(config)
 	player.authoritative_damage = false
@@ -1318,15 +1351,26 @@ func _handle_authoritative_weapon_action(actor_position: Vector3, weapon_key: St
 			nearest = candidate
 			nearest_distance = distance
 	if nearest != null:
+		var picked_position := nearest.global_position
+		var replaced := {}
+		var incoming_spec := WeaponCatalog.get_weapon(nearest.weapon_key)
+		var current_spec := WeaponCatalog.get_weapon(weapon_key)
+		var replaces_current: bool = nearest.weapon_key != weapon_key and incoming_spec.slot == current_spec.slot and incoming_spec.slot != LocalStrikeWeaponDefinition.Slot.GRENADE
 		if peer_id == 1:
+			if replaces_current and not (weapon_key == "knife" and current_spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE):
+				replaced = player.remove_current_weapon_for_drop()
 			player.pickup_weapon(nearest.weapon_key, nearest.ammo, nearest.reserve, nearest.bloodiness)
 			hud.show_toast("Picked up %s" % player.get_weapon_name(), 1.4)
 		else:
+			if replaces_current:
+				replaced = {"key": weapon_key, "ammo": current_ammo, "reserve": reserve, "bloodiness": 0.0}
 			_confirm_network_pickup.rpc_id(peer_id, nearest.weapon_key, nearest.ammo, nearest.reserve, nearest.bloodiness)
 		dropped_weapons.erase(nearest.drop_id)
 		if NetworkManager.peer != null:
 			_remove_network_drop.rpc(nearest.drop_id)
 		nearest.queue_free()
+		if not replaced.is_empty():
+			_spawn_dropped_weapon(replaced.key, int(replaced.ammo), int(replaced.reserve), picked_position + Vector3.UP * 0.18, Vector3.UP * 0.8, "", float(replaced.get("bloodiness", 0.0)))
 		return
 	var data := player.remove_current_weapon_for_drop() if peer_id == 1 else {"key": weapon_key, "ammo": current_ammo, "reserve": reserve, "bloodiness": 0.0}
 	if data.is_empty():
@@ -1438,7 +1482,7 @@ func _apply_radial_damage(position: Vector3, damage: float, radius: float, exclu
 			continue
 		damaged_targets[target.get_instance_id()] = true
 		var target_position: Vector3 = target.global_position
-		if not _has_explosion_line_of_sight(position, target_position + Vector3.UP * 0.4, target):
+		if not _has_explosion_line_of_sight(position, target_position + Vector3.UP * 0.4, target, excluded):
 			continue
 		var falloff := clampf(1.0 - position.distance_to(target_position) / radius, 0.15, 1.0)
 		if target.has_method("apply_damage") or target.has_method("take_damage"):
@@ -1451,9 +1495,11 @@ func _apply_radial_damage(position: Vector3, damage: float, radius: float, exclu
 			var direction := (target_position - position).normalized()
 			target.apply_gameplay_impulse((direction + Vector3.UP * 0.25) * 18.0 * falloff, Vector3.ZERO)
 
-func _has_explosion_line_of_sight(origin: Vector3, target: Vector3, target_object: Object) -> bool:
+func _has_explosion_line_of_sight(origin: Vector3, target: Vector3, target_object: Object, excluded: Object = null) -> bool:
 	var query := PhysicsRayQueryParameters3D.create(origin + Vector3.UP * 0.12, target)
 	query.collision_mask = 7
+	if excluded is CollisionObject3D:
+		query.exclude = [(excluded as CollisionObject3D).get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	return hit.is_empty() or hit.get("collider") == target_object
 
@@ -1461,24 +1507,29 @@ func _update_network_state(delta: float) -> void:
 	if NetworkManager.peer == null:
 		return
 	network_sync_timer -= delta
-	if network_sync_timer > 0.0:
-		return
-	network_sync_timer = 0.05
+	prop_sync_timer -= delta
+	bot_sync_timer -= delta
 	if multiplayer.is_server():
-		_receive_player_snapshot.rpc(1, player.global_position, player.rotation.y, player.health, player.get_weapon_name())
-		prop_sync_timer -= delta
+		if network_sync_timer <= 0.0:
+			network_sync_timer = 0.05
+			_receive_player_snapshot.rpc(1, player.global_position, player.rotation.y, player.health, player.get_weapon_name())
 		if prop_sync_timer <= 0.0:
 			prop_sync_timer = 0.1
 			_sync_physics_state.rpc(_serialize_physics_state())
+		if bot_sync_timer <= 0.0:
+			bot_sync_timer = 0.1
+			_sync_bot_state.rpc(_serialize_bot_state())
 	else:
-		_submit_player_snapshot.rpc_id(1, player.global_position, player.rotation.y, player.get_weapon_name())
+		if network_sync_timer <= 0.0:
+			network_sync_timer = 0.05
+			_submit_player_snapshot.rpc_id(1, player.global_position, player.rotation.y, player.get_weapon_name())
 
 @rpc("any_peer", "call_remote", "unreliable", 1)
 func _submit_player_snapshot(position: Vector3, yaw: float, weapon: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	var avatar := _get_or_create_avatar(sender, 0)
+	var avatar := _get_or_create_avatar(sender, 0, position)
 	avatar.apply_snapshot(position, yaw, avatar.health, weapon)
 	_receive_player_snapshot.rpc(sender, position, yaw, avatar.health, weapon)
 
@@ -1487,7 +1538,7 @@ func _receive_player_snapshot(peer_id: int, position: Vector3, yaw: float, healt
 	if peer_id == multiplayer.get_unique_id():
 		return
 	var team: int = int(GameSession.roster.get(peer_id, {}).get("team", 0))
-	var avatar := _get_or_create_avatar(peer_id, team)
+	var avatar := _get_or_create_avatar(peer_id, team, position)
 	avatar.apply_snapshot(position, yaw, health, weapon)
 
 func _serialize_physics_state() -> Dictionary:
@@ -1502,6 +1553,59 @@ func _serialize_physics_state() -> Dictionary:
 		if is_instance_valid(weapon):
 			drops[drop_id] = weapon.serialize_state()
 	return {"props": props, "drops": drops}
+
+func _serialize_bot_state() -> Array:
+	var snapshot := []
+	for bot in allies + enemies:
+		if not is_instance_valid(bot) or bot.network_bot_id.is_empty() or bot.health <= 0.0:
+			continue
+		snapshot.append([bot.network_bot_id, bot.global_position, bot.rotation.y, bot.health, bot.team, bot.enemy_kind, bot.weapon_key, bot.sandbox_behavior])
+	return snapshot
+
+@rpc("authority", "call_remote", "unreliable", 4)
+func _sync_bot_state(snapshot: Array) -> void:
+	_apply_bot_snapshot(snapshot)
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_bot_snapshot(snapshot: Array) -> void:
+	_apply_bot_snapshot(snapshot)
+
+func _apply_bot_snapshot(snapshot: Array) -> void:
+	if not _is_network_client():
+		return
+	var active_ids := {}
+	for state_variant in snapshot:
+		var state: Array = state_variant
+		if state.size() < 8:
+			continue
+		var bot_id := str(state[0])
+		active_ids[bot_id] = true
+		var bot: LocalStrikeEnemy = replicated_bots.get(bot_id)
+		if not is_instance_valid(bot):
+			bot = EnemyScript.new()
+			bot.bot_difficulty = bot_difficulty
+			bot.configure_spawn(int(state[4]), str(state[5]), str(state[6]), str(state[7]), state[1])
+			bot.configure_network_replica(bot_id)
+			bot.position = state[1]
+			level_root.add_child(bot)
+			replicated_bots[bot_id] = bot
+			if bot.team == player_team:
+				allies.append(bot)
+			else:
+				enemies.append(bot)
+		bot.apply_network_snapshot(state[1], float(state[2]), float(state[3]))
+	for bot_id_variant in replicated_bots.keys():
+		var bot_id := str(bot_id_variant)
+		if active_ids.has(bot_id):
+			continue
+		var stale: LocalStrikeEnemy = replicated_bots[bot_id_variant]
+		allies.erase(stale)
+		enemies.erase(stale)
+		if is_instance_valid(stale):
+			if stale.get_parent() != null:
+				stale.get_parent().remove_child(stale)
+			stale.queue_free()
+		replicated_bots.erase(bot_id_variant)
 
 @rpc("authority", "call_remote", "unreliable", 3)
 func _sync_physics_state(snapshot: Dictionary) -> void:
@@ -1525,14 +1629,15 @@ func _apply_physics_snapshot(snapshot: Dictionary) -> void:
 			drop.linear_velocity = state.linear_velocity
 			drop.angular_velocity = state.angular_velocity
 
-func _get_or_create_avatar(peer_id: int, team: int) -> LocalStrikeNetworkAvatar:
+func _get_or_create_avatar(peer_id: int, team: int, initial_position := Vector3.ZERO) -> LocalStrikeNetworkAvatar:
 	if remote_avatars.has(peer_id) and is_instance_valid(remote_avatars[peer_id]):
 		return remote_avatars[peer_id]
 	var avatar: LocalStrikeNetworkAvatar = NetworkAvatarScript.new()
 	avatar.configure(peer_id, team)
 	avatar.damaged.connect(_on_network_avatar_damaged)
 	level_root.add_child(avatar)
-	avatar.global_position = current_level.player_spawn
+	avatar.global_position = initial_position
+	avatar.target_position = initial_position
 	remote_avatars[peer_id] = avatar
 	_refresh_bot_opponents()
 	return avatar
@@ -1588,6 +1693,22 @@ func _confirm_melee(result: Dictionary) -> void:
 		player.confirm_melee_hit(killed_target, stain_amount)
 
 @rpc("any_peer", "call_remote", "reliable")
+func _request_network_reload(weapon_key: String) -> void:
+	if not multiplayer.is_server() or not WeaponCatalog.all().has(weapon_key):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var avatar: LocalStrikeNetworkAvatar = remote_avatars.get(sender)
+	var spec := WeaponCatalog.get_weapon(weapon_key)
+	if not is_instance_valid(avatar) or avatar.weapon_name != spec.display_name or spec.reload_time <= 0.0:
+		return
+	var now: float = Time.get_ticks_msec() / 1000.0
+	var previous: Dictionary = peer_shot_state.get(sender, {"sequence": 0, "time": -10.0, "weapon": weapon_key, "ammo": spec.magazine, "reload_ready": -1.0})
+	if str(previous.get("weapon", "")) != weapon_key:
+		return
+	previous["reload_ready"] = now + spec.reload_time
+	peer_shot_state[sender] = previous
+
+@rpc("any_peer", "call_remote", "reliable")
 func _request_network_shot(sequence: int, origin: Vector3, direction: Vector3, weapon_key: String, mode: String) -> void:
 	if not multiplayer.is_server():
 		return
@@ -1602,16 +1723,22 @@ func _request_network_shot(sequence: int, origin: Vector3, direction: Vector3, w
 	if horizontal_direction.length_squared() < 0.5 or horizontal_direction.dot(-avatar.global_transform.basis.z) < 0.45:
 		return
 	var now: float = Time.get_ticks_msec() / 1000.0
-	var previous: Dictionary = peer_shot_state.get(sender, {"sequence": 0, "time": -10.0, "weapon": weapon_key, "ammo": spec.magazine})
+	var previous: Dictionary = peer_shot_state.get(sender, {"sequence": 0, "time": -10.0, "weapon": weapon_key, "ammo": spec.magazine, "reload_ready": -1.0})
 	if str(previous.weapon) != weapon_key:
-		previous = {"sequence": int(previous.sequence), "time": float(previous.time), "weapon": weapon_key, "ammo": spec.magazine}
+		previous = {"sequence": int(previous.sequence), "time": float(previous.time), "weapon": weapon_key, "ammo": spec.magazine, "reload_ready": -1.0}
+	var reload_ready := float(previous.get("reload_ready", -1.0))
+	if reload_ready > 0.0:
+		if now < reload_ready:
+			return
+		previous.ammo = spec.magazine
+		previous.reload_ready = -1.0
 	if int(previous.ammo) <= 0:
 		if now - float(previous.time) < spec.reload_time:
 			return
 		previous.ammo = spec.magazine
 	if sequence <= int(previous.sequence) or now - float(previous.time) < spec.fire_delay * 0.82:
 		return
-	peer_shot_state[sender] = {"sequence": sequence, "time": now, "weapon": weapon_key, "ammo": int(previous.ammo) - 1}
+	peer_shot_state[sender] = {"sequence": sequence, "time": now, "weapon": weapon_key, "ammo": int(previous.ammo) - 1, "reload_ready": float(previous.get("reload_ready", -1.0))}
 	var combined := {"sequence": sequence, "segments": [], "hits": [], "penetrations": 0, "ricochets": 0}
 	var forward := direction.normalized()
 	var right := forward.cross(Vector3.UP).normalized()
@@ -1731,15 +1858,16 @@ func _update_environment(palette: Dictionary) -> void:
 			environment.fog_density = 0.014
 			environment.volumetric_fog_density = 0.026
 		"foundry_night":
+			var compatibility := RenderingServer.get_current_rendering_method() == "gl_compatibility"
 			sun.rotation_degrees = Vector3(-68, 28, 0)
 			sun.light_energy = 0.16
 			sun.light_color = Color("78989d")
 			environment.ambient_light_color = Color("26363a")
-			environment.ambient_light_energy = 0.38
+			environment.ambient_light_energy = 0.62 if compatibility else 0.38
 			environment.fog_light_color = Color("182629")
-			environment.fog_density = 0.018
+			environment.fog_density = 0.009 if compatibility else 0.018
 			environment.volumetric_fog_density = 0.032
-			environment.tonemap_exposure = 1.2
+			environment.tonemap_exposure = 1.32 if compatibility else 1.2
 
 func _apply_quality(index: int) -> void:
 	current_quality = clampi(index, 0, 2)
@@ -2068,9 +2196,12 @@ func _create_physics_props() -> void:
 func _on_physics_prop_state_changed(_prop_id: String, _state: Dictionary) -> void:
 	pass
 
-func _on_physics_prop_destroyed(_prop: Object, position: Vector3, surface_type: String) -> void:
-	_create_burst(position, Color("b79872") if surface_type == "wood" else Color("b9d6dc"), 18)
+func _on_physics_prop_destroyed(prop: Object, position: Vector3, surface_type: String) -> void:
+	var explosive := prop is LocalStrikePhysicsProp and (prop as LocalStrikePhysicsProp).visual_variant == "barrel"
+	_create_burst(position, Color("ff7a35") if explosive else (Color("b79872") if surface_type == "wood" else Color("b9d6dc")), 32 if explosive else 18)
 	effects.spawn_impact(position, Vector3.UP, surface_type, false)
+	if explosive and not _is_network_client():
+		_apply_radial_damage(position, 70.0, 4.5, prop)
 
 func _create_door_frame(position: Vector3, rotation_y: float, size: Vector3, color: Color) -> void:
 	var frame := Node3D.new()
@@ -2349,6 +2480,7 @@ func _update_hud() -> void:
 		"stamina": player.stamina,
 		"buy_visible": show_buy and started and game_mode != LocalStrikeMatchConfig.Mode.SANDBOX and (phase == Phase.BUY or game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH),
 		"sandbox_visible": false,
+		"sandbox_mode": game_mode == LocalStrikeMatchConfig.Mode.SANDBOX,
 		"sandbox_npcs": enemies.size() + allies.size(),
 		"sandbox_props": physics_props.size() + dropped_weapons.size(),
 		"sandbox_weapons": dropped_weapons.size(),
@@ -2422,6 +2554,7 @@ func _add_key_action(action: StringName, key: Key) -> void:
 	if not InputMap.has_action(action):
 		InputMap.add_action(action)
 	var event := InputEventKey.new()
+	event.keycode = key
 	event.physical_keycode = key
 	if not InputMap.action_has_event(action, event):
 		InputMap.action_add_event(action, event)

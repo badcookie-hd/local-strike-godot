@@ -26,6 +26,8 @@ var patrol_points: Array[Vector3] = []
 var objective_target := Vector3.ZERO
 var has_objective := false
 var team := 1
+var network_bot_id := ""
+var network_replica := false
 
 var health := 100.0
 var max_health := 100.0
@@ -67,6 +69,8 @@ var _attack_anim_timer := 0.0
 var _external_character: Node3D
 var _animation_player: AnimationPlayer
 var _current_animation := ""
+var _network_target_position := Vector3.ZERO
+var _network_target_yaw := 0.0
 
 func configure_spawn(next_team: int, kind: String, next_weapon: String, behavior: String, anchor: Vector3) -> void:
 	team = next_team
@@ -75,9 +79,13 @@ func configure_spawn(next_team: int, kind: String, next_weapon: String, behavior
 	sandbox_behavior = behavior if behavior in ["aggressive", "guard", "passive"] else "aggressive"
 	guard_anchor = anchor
 
+func configure_network_replica(bot_id: String) -> void:
+	network_bot_id = bot_id
+	network_replica = true
+
 func _ready() -> void:
 	collision_layer = 2
-	collision_mask = 1
+	collision_mask = 1 if network_replica else 3
 	add_to_group("damageable_actor")
 	_apply_profile()
 	if not _configured_weapon.is_empty():
@@ -88,7 +96,11 @@ func _ready() -> void:
 		fire_delay = spec.melee_light_recovery
 	_build_collision()
 	_build_visual()
-	_build_navigation()
+	if network_replica:
+		_network_target_position = global_position
+		_network_target_yaw = rotation.y
+	else:
+		_build_navigation()
 
 func _apply_profile() -> void:
 	match enemy_kind:
@@ -255,6 +267,13 @@ func _build_navigation() -> void:
 
 func _physics_process(delta: float) -> void:
 	if _dead:
+		return
+	if network_replica:
+		var previous := global_position
+		global_position = global_position.lerp(_network_target_position, minf(1.0, delta * 14.0))
+		rotation.y = lerp_angle(rotation.y, _network_target_yaw, minf(1.0, delta * 16.0))
+		velocity = (global_position - previous) / maxf(delta, 0.001)
+		_animate_body(delta)
 		return
 	_shoot_cooldown -= delta
 	_attack_anim_timer = maxf(0.0, _attack_anim_timer - delta)
@@ -434,7 +453,7 @@ func _stain_held_weapon(amount: float) -> void:
 			material.albedo_color = material.albedo_color.lerp(Color("5a1118"), clampf(amount, 0.0, 0.5))
 
 func take_damage(amount: float, hit_zone := "torso", context := {}) -> bool:
-	if _dead:
+	if _dead or network_replica:
 		return false
 	last_hit_context = context.duplicate(true) if context is Dictionary else {}
 	health -= amount
@@ -457,6 +476,8 @@ func take_damage(amount: float, hit_zone := "torso", context := {}) -> bool:
 	return false
 
 func apply_gameplay_impulse(impulse: Vector3, _at_position := Vector3.ZERO) -> void:
+	if network_replica:
+		return
 	velocity += impulse * (0.12 if enemy_kind == "heavy" else 0.2)
 	velocity.y = maxf(velocity.y, impulse.y * 0.12)
 
@@ -469,6 +490,16 @@ func hear_noise(position: Vector3, loudness := 1.0) -> void:
 func set_opponents(next_opponents: Array[Node3D]) -> void:
 	opponents = next_opponents
 	_select_target()
+
+func apply_network_snapshot(next_position: Vector3, yaw: float, next_health: float) -> void:
+	if not network_replica:
+		return
+	_network_target_position = next_position
+	_network_target_yaw = yaw
+	health = next_health
+	if global_position.distance_squared_to(next_position) > 36.0:
+		global_position = next_position
+		rotation.y = yaw
 
 func _select_target() -> void:
 	var best: Node3D

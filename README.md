@@ -9,7 +9,7 @@ Ein eigenstaendiger taktischer Shooter und lokaler Physik-Sandbox-Modus fuer God
 1. `START_GAME.cmd` startet Forward+ mit Vulkan und faellt bei einem Startfehler automatisch auf OpenGL zurueck.
 2. `START_GAME_COMPATIBILITY.cmd` erzwingt den reduzierten OpenGL-Modus.
 3. `OPEN_EDITOR.cmd` oeffnet das Projekt in Godot 4.7.
-4. `RUN_TESTS.cmd` startet Gameplay-, Sandbox-Grenz- und LAN-Socket-Tests.
+4. `RUN_TESTS.cmd` startet Gameplay-, Sandbox-Grenz-, LAN-Socket- und ENet-RPC-Synchronisationstests.
 
 Godot kann ueber `PATH` gefunden oder portabel in `engine/` abgelegt werden. Die EXE selbst ist wegen GitHubs 100-MB-Dateigrenze nicht im Repository; Details stehen in `engine/README.md`.
 
@@ -75,6 +75,6 @@ Sandbox bleibt bewusst lokal. LAN-Schaden und Nahkampftreffer in den kompetitive
 
 ## Abnahme
 
-`RUN_TESTS.cmd` prueft Parser und Laufzeit, alle 22 Ausruestungen, PBR-Dateien, Browser-Suche und Aktionen, exakte Bot-Konfiguration, Platzierung, Nahkampf, Effekte, 40/64/32-Objektgrenzen, Defusal, Deathmatch und LAN-Sockets.
+`RUN_TESTS.cmd` prueft Parser und Laufzeit, alle 22 Ausruestungen, PBR-Dateien, Browser-Suche und Aktionen, exakte Bot-Konfiguration, Platzierung, Nahkampf, Effekte, 40/64/32-Objektgrenzen, Defusal und Deathmatch. Ein echter ENet-Test prueft zusaetzlich Host/Client-RPCs, 5v5-Bot-Auffuellung, Bot-Replikate und Spieler-Avatare.
 
 Der 120-Sekunden-Benchmark auf einer RTX 3070 erreichte in Abandoned Foundry bei 1920x1080, Profil Hoch, zehn Bots und 13 Physikobjekten durchschnittlich **139,5 FPS**. Das Minimum-Sample lag bei **132 FPS**, keines der 474 Samples unter 55 FPS. Ergebnis: `docs/benchmark-foundry.json`.

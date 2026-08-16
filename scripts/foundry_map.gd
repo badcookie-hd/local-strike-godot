@@ -266,8 +266,8 @@ func _add_fixture(position: Vector3, color: Color, energy: float, range_value: f
 	var light := OmniLight3D.new()
 	light.position = position + Vector3.DOWN * 0.15
 	light.light_color = color
-	light.light_energy = energy
-	light.omni_range = range_value
+	light.light_energy = energy * (1.24 if _compatibility else 1.0)
+	light.omni_range = range_value * (1.08 if _compatibility else 1.0)
 	light.shadow_enabled = not _compatibility and energy >= 3.5
 	_detail_root.add_child(light)
 
