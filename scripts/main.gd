@@ -1274,7 +1274,7 @@ func _on_connection_state_changed(state: String) -> void:
 			_finish_match()
 
 func _on_network_peer_joined(_peer_id: int) -> void:
-	# The roster registration RPC performs the authoritative bot refill once.
+	# Bots werden nach der Spielerregistrierung aufgefüllt.
 	pass
 
 func _on_network_peer_left(peer_id: int) -> void:

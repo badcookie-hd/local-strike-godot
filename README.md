@@ -1,6 +1,6 @@
 # Local Strike Godot
 
-Ein eigenstaendiger taktischer Shooter und lokaler Physik-Sandbox-Modus fuer Godot 4.7. Sandbox startet standardmaessig in der neuen Karte **Abandoned Foundry**; Defusal, Team Deathmatch, Solo-Bots und LAN bleiben spielbar. Das Projekt verwendet keine Counter-Strike- oder Paint-the-Town-Red-Assets.
+Ein experimentelles Godot-4.7-Spiel mit taktischem Shooter- und lokalem Physik-Sandbox-Modus. Die Sandbox startet standardmaessig in **Abandoned Foundry**; Defusal, Team Deathmatch, Solo-Bots und LAN sind ebenfalls spielbar. Das Projekt verwendet eigene Logik und frei lizenzierte Assets.
 
 ![Abandoned Foundry in Forward+](docs/foundry-gameplay-1080p.png)
 

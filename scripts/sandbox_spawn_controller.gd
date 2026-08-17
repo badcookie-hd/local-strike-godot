@@ -82,11 +82,11 @@ func rotate_preview(step_degrees: float) -> void:
 	update_preview()
 
 func equip_weapon(weapon_id: String) -> void:
-	# The game session owns inventory; this method completes the public controller API.
+	# Das Inventar selbst wird von GameSession verwaltet.
 	active_options = {"weapon": weapon_id}
 
 func clear_category(_category: String) -> void:
-	# Category clearing is dispatched to the owning sandbox session.
+	# Das Leeren übernimmt die aktive Sandbox-Sitzung.
 	pass
 
 func _process(_delta: float) -> void:
