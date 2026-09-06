@@ -3,6 +3,7 @@ extends RefCounted
 
 const Catalog = preload("res://scripts/weapon_catalog.gd")
 const Materials = preload("res://scripts/material_library.gd")
+const CUSTOM_MODELS: Array[String] = ["kestrel", "doublebarrel", "longbow"]
 
 const EXTERNAL_MODELS := {
 	"knife": "res://assets/models/quaternius/modular_weapons/Dagger.fbx",
@@ -35,17 +36,27 @@ static func create(weapon_key: String, bloodiness := 0.0) -> Node3D:
 		if packed != null:
 			var pivot := Node3D.new()
 			pivot.name = "ImportedCC0Model"
-			pivot.rotation_degrees = Vector3(0, 180, 0)
+			# Imported firearms run along +X; melee blades/handles run along +Y.
+			# Normalize every held model to muzzle/blade forward (-Z), top (+Y).
+			pivot.basis = Basis(Vector3.BACK, PI * 0.5) * Basis(Vector3.RIGHT, -PI * 0.5) if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else Basis(Vector3.UP, PI * 0.5)
 			root.add_child(pivot)
 			var imported := packed.instantiate()
 			imported.name = "SourceModel"
 			pivot.add_child(imported)
-			_fit_imported_model(imported, 0.58 if spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY else 1.08)
+			var extent := 0.58 if spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY else 1.08
+			if weapon_key == "knife": extent = 0.5
+			elif weapon_key == "machete": extent = 0.85
+			_fit_imported_model(imported, extent)
 			_apply_external_material(imported, weapon_key, bloodiness)
 			root.set_meta("external_model", true)
 			root.set_meta("weapon_key", weapon_key)
 			root.set_meta("bloodiness", bloodiness)
-			return root
+			return _finish_model(root, weapon_key)
+	if weapon_key in CUSTOM_MODELS:
+		_build_custom_firearm(root, weapon_key, steel, dark, wood)
+		root.set_meta("weapon_key", weapon_key)
+		root.set_meta("bloodiness", bloodiness)
+		return _finish_model(root, weapon_key)
 	match spec.category:
 		"knife":
 			_box(root, Vector3(0.06, 0.06, 0.58), Vector3(0, 0, -0.13), steel)
@@ -81,10 +92,78 @@ static func create(weapon_key: String, bloodiness := 0.0) -> Node3D:
 				_cylinder(root, 0.055, 0.055, 0.34, Vector3(0, 0.14, -0.08), Vector3(90, 0, 0), steel)
 	root.set_meta("weapon_key", weapon_key)
 	root.set_meta("bloodiness", bloodiness)
+	return _finish_model(root, weapon_key)
+
+static func _finish_model(root: Node3D, key: String) -> Node3D:
+	var spec := Catalog.get_weapon(key)
+	var grip := Vector3(0, -0.085, 0.35)
+	var muzzle := Vector3(0, 0.12, -0.54)
+	if spec.slot == LocalStrikeWeaponDefinition.Slot.SECONDARY:
+		grip = Vector3(0, -0.055, 0.18)
+		muzzle = Vector3(0, 0.1, -0.29)
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE:
+		grip = Vector3(0, 0, 0.35)
+		muzzle = Vector3(0, 0, -0.54)
+	elif spec.slot == LocalStrikeWeaponDefinition.Slot.GRENADE:
+		grip = Vector3.ZERO
+		muzzle = Vector3(0, 0.2, 0)
+	match key:
+		"knife":
+			grip = Vector3(0, 0, 0.17)
+			muzzle = Vector3(0, 0, -0.25)
+		"kestrel":
+			grip = Vector3(0, -0.14, 0.055)
+			muzzle = Vector3(0, 0.02, -0.37)
+		"doublebarrel":
+			grip = Vector3(0, -0.08, 0.21)
+			muzzle = Vector3(0, 0, -0.71)
+		"longbow":
+			grip = Vector3(0, -0.14, 0.12)
+			muzzle = Vector3(0, 0.015, -0.83)
+	for child in root.get_children():
+		if child is Node3D:
+			child.position -= grip
+	root.set_meta("grip", Vector3.ZERO)
+	root.set_meta("support", Vector3(-0.025, -0.005, -0.20) if spec.slot == LocalStrikeWeaponDefinition.Slot.PRIMARY else Vector3(-0.055, -0.035, 0.01))
+	root.set_meta("muzzle", muzzle - grip)
 	return root
 
 static func has_external_model(weapon_key: String) -> bool:
 	return EXTERNAL_MODELS.has(weapon_key)
+
+static func has_detailed_model(weapon_key: String) -> bool:
+	return has_external_model(weapon_key) or weapon_key in CUSTOM_MODELS
+
+static func _build_custom_firearm(root: Node3D, key: String, steel: Material, dark: Material, wood: Material) -> void:
+	if key == "kestrel":
+		_box(root, Vector3(0.12, 0.12, 0.38), Vector3(0, 0.015, -0.08), steel)
+		_box(root, Vector3(0.105, 0.22, 0.14), Vector3(0, -0.14, 0.055), dark)
+		_box(root, Vector3(0.08, 0.2, 0.1), Vector3(0, -0.32, 0.045), steel)
+		_cylinder(root, 0.025, 0.03, 0.18, Vector3(0, 0.02, -0.28), Vector3(90, 0, 0), dark)
+		_box(root, Vector3(0.04, 0.055, 0.035), Vector3(0, 0.095, -0.22), dark)
+		_box(root, Vector3(0.1, 0.04, 0.045), Vector3(0, 0.09, 0.08), dark)
+		_box(root, Vector3(0.115, 0.05, 0.16), Vector3(0, -0.14, -0.08), dark)
+	elif key == "doublebarrel":
+		for side in [-1.0, 1.0]:
+			_cylinder(root, 0.038, 0.042, 0.72, Vector3(side * 0.045, 0, -0.34), Vector3(90, 0, 0), steel)
+			_cylinder(root, 0.03, 0.03, 0.008, Vector3(side * 0.045, 0, -0.706), Vector3(90, 0, 0), dark)
+		_box(root, Vector3(0.16, 0.12, 0.18), Vector3(0, -0.015, 0.09), steel)
+		_box(root, Vector3(0.13, 0.085, 0.36), Vector3(0, -0.075, -0.25), wood)
+		_box(root, Vector3(0.12, 0.14, 0.35), Vector3(0, -0.08, 0.35), wood)
+		_box(root, Vector3(0.13, 0.18, 0.045), Vector3(0, -0.08, 0.55), dark)
+		_box(root, Vector3(0.025, 0.035, 0.035), Vector3(0, 0.05, -0.65), steel)
+	else:
+		var olive := _material(Color("57674c"), 0.75, 0.1)
+		_box(root, Vector3(0.13, 0.14, 0.55), Vector3(0, -0.02, -0.02), olive)
+		_cylinder(root, 0.025, 0.04, 0.64, Vector3(0, 0.015, -0.51), Vector3(90, 0, 0), steel)
+		_box(root, Vector3(0.105, 0.2, 0.12), Vector3(0, -0.14, 0.12), dark)
+		_box(root, Vector3(0.12, 0.17, 0.28), Vector3(0, -0.035, 0.38), olive)
+		_box(root, Vector3(0.14, 0.2, 0.04), Vector3(0, -0.035, 0.54), dark)
+		for z in [-0.15, 0.08]:
+			_box(root, Vector3(0.06, 0.07, 0.04), Vector3(0, 0.1, z), steel)
+		_cylinder(root, 0.047, 0.047, 0.35, Vector3(0, 0.17, -0.04), Vector3(90, 0, 0), dark)
+		_cylinder(root, 0.061, 0.061, 0.08, Vector3(0, 0.17, -0.21), Vector3(90, 0, 0), steel)
+		_box(root, Vector3(0.13, 0.035, 0.035), Vector3(0.1, 0.035, 0.05), steel)
 
 static func _apply_external_material(node: Node, weapon_key: String, bloodiness: float) -> void:
 	if node is MeshInstance3D:

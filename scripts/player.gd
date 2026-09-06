@@ -61,6 +61,8 @@ var _sight: MeshInstance3D
 var _accent: MeshInstance3D
 var _left_hand: MeshInstance3D
 var _right_hand: MeshInstance3D
+var _left_forearm: MeshInstance3D
+var _right_forearm: MeshInstance3D
 var _muzzle: Marker3D
 var _muzzle_flash: MeshInstance3D
 var _muzzle_light: OmniLight3D
@@ -116,7 +118,7 @@ func _build_body() -> void:
 	_camera.add_child(viewmodel_light)
 
 	_weapon_root = Node3D.new()
-	_weapon_root.position = Vector3(0.34, -0.28, -0.72)
+	_weapon_root.position = Vector3(0.23, -0.27, -0.48)
 	_camera.add_child(_weapon_root)
 
 	_weapon_body = MeshInstance3D.new()
@@ -173,6 +175,8 @@ func _build_body() -> void:
 
 	_left_hand = _create_gloved_arm(Vector3(-0.2, -0.19, -0.18), -18.0)
 	_right_hand = _create_gloved_arm(Vector3(0.12, -0.22, 0.11), -8.0)
+	_left_forearm = _create_forearm()
+	_right_forearm = _create_forearm()
 
 	_muzzle = Marker3D.new()
 	_muzzle.position = Vector3(0, 0, -0.76)
@@ -204,20 +208,49 @@ func _build_body() -> void:
 
 func _create_gloved_arm(position: Vector3, rotation_z: float) -> MeshInstance3D:
 	var arm := MeshInstance3D.new()
-	var mesh := CapsuleMesh.new()
-	mesh.radius = 0.075
-	mesh.height = 0.58
-	mesh.radial_segments = 12
-	mesh.rings = 4
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(0.09, 0.115, 0.105)
 	arm.mesh = mesh
 	arm.position = position
-	arm.rotation_degrees = Vector3(72, 0, rotation_z)
+	arm.rotation_degrees = Vector3(10, 0, rotation_z)
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color("20282e")
 	material.roughness = 0.84
 	arm.material_override = material
 	_weapon_root.add_child(arm)
 	return arm
+
+func _create_forearm() -> MeshInstance3D:
+	var arm := MeshInstance3D.new()
+	var mesh := CapsuleMesh.new()
+	mesh.radius = 0.052
+	mesh.height = 0.4
+	mesh.radial_segments = 12
+	mesh.rings = 4
+	arm.mesh = mesh
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color("35423a")
+	material.roughness = 0.95
+	arm.material_override = material
+	_weapon_root.add_child(arm)
+	return arm
+
+func _pose_viewmodel_hands(spec: LocalStrikeWeaponDefinition) -> void:
+	_right_hand.position = Vector3(0, -0.012, 0.015)
+	_right_hand.rotation_degrees = Vector3(10, 0, -5)
+	_left_hand.position = Vector3(_imported_weapon_model.get_meta("support")) * 0.82 + Vector3(-0.02, -0.025, 0)
+	_left_hand.rotation_degrees = Vector3(-8, 0, 15)
+	_left_hand.visible = spec.slot in [LocalStrikeWeaponDefinition.Slot.PRIMARY, LocalStrikeWeaponDefinition.Slot.SECONDARY]
+	_left_forearm.visible = _left_hand.visible
+	_pose_forearm(_right_forearm, Vector3(0.23, -0.32, 0.4), _right_hand.position)
+	_pose_forearm(_left_forearm, Vector3(-0.38, -0.30, 0.32), _left_hand.position)
+	_muzzle.position = Vector3(_imported_weapon_model.get_meta("muzzle")) * 0.82
+
+func _pose_forearm(arm: MeshInstance3D, elbow: Vector3, wrist: Vector3) -> void:
+	var direction := wrist - elbow
+	(arm.mesh as CapsuleMesh).height = direction.length()
+	arm.position = (elbow + wrist) * 0.5
+	arm.basis = Basis(Quaternion(Vector3.UP, direction.normalized()))
 
 func _set_viewmodel_layers(node: Node) -> void:
 	if node is GeometryInstance3D:
@@ -350,9 +383,10 @@ func _physics_process(delta: float) -> void:
 	var target_fov := current_spec.ads_fov if aiming else (78.0 if sprinting else 74.0)
 	_camera.fov = lerpf(_camera.fov, target_fov, 10.0 * delta)
 	_weapon_sway = _weapon_sway.lerp(Vector2.ZERO, minf(1.0, 10.0 * delta))
-	_weapon_root.position.x = lerpf(_weapon_root.position.x, (0.0 if aiming else 0.34) - _weapon_sway.x, 14.0 * delta)
-	_weapon_root.position.y = lerpf(_weapon_root.position.y, (-0.19 if aiming else -0.28) + bob, 12.0 * delta)
-	_weapon_root.position.z = lerpf(_weapon_root.position.z, -0.72 + absf(_weapon_sway.y) * 0.5, 14.0 * delta)
+	_weapon_root.position.x = lerpf(_weapon_root.position.x, (0.0 if aiming else 0.23) - _weapon_sway.x, 14.0 * delta)
+	var sight_height := -0.255 if current_spec.category in ["sniper", "dmr"] else -0.19
+	_weapon_root.position.y = lerpf(_weapon_root.position.y, (sight_height if aiming else -0.27) + bob, 12.0 * delta)
+	_weapon_root.position.z = lerpf(_weapon_root.position.z, -0.48 + absf(_weapon_sway.y) * 0.5, 14.0 * delta)
 	var target_rotation := Vector3(0.0, 0.0, -input.x * 0.035)
 	if _melee_anim_timer > 0.0 and _melee_anim_duration > 0.0:
 		var progress := 1.0 - _melee_anim_timer / _melee_anim_duration
@@ -807,14 +841,15 @@ func _update_weapon_visual(spec: LocalStrikeWeaponDefinition) -> void:
 			_sight.position = Vector3(0, 0.115, -0.16)
 	_muzzle.position = spec.muzzle_offset
 	_base_weapon_color = body_material.albedo_color
-	if WeaponModel.has_external_model(spec.key):
+	if WeaponCatalog.all().has(spec.key):
 		_imported_weapon_model = WeaponModel.create(spec.key, float(weapon_blood.get(spec.key, 0.0)))
-		_imported_weapon_model.position = Vector3(0, 0.01, -0.16)
+		_imported_weapon_model.position = Vector3.ZERO
 		_imported_weapon_model.scale = Vector3.ONE * 0.82
 		_weapon_root.add_child(_imported_weapon_model)
 		_set_viewmodel_layers(_imported_weapon_model)
 		for primitive in [_weapon_body, _barrel, _grip, _sight, _accent]:
 			primitive.visible = false
+		_pose_viewmodel_hands(spec)
 	_apply_weapon_blood()
 
 func _apply_weapon_blood() -> void:
@@ -825,7 +860,7 @@ func _apply_weapon_blood() -> void:
 		return
 	var bloodiness := clampf(float(weapon_blood.get(weapon_key, 0.0)), 0.0, 1.0)
 	material.albedo_color = _base_weapon_color.lerp(Color("5a1118"), bloodiness * 0.68)
-	if WeaponModel.has_external_model(weapon_key) and is_instance_valid(_imported_weapon_model):
+	if is_instance_valid(_imported_weapon_model):
 		var position := _imported_weapon_model.position
 		var rotation := _imported_weapon_model.rotation
 		var scale_value := _imported_weapon_model.scale

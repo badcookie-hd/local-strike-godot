@@ -7,6 +7,9 @@ signal join_requested(address: String)
 signal refresh_servers_requested
 signal buy_requested(key: String)
 signal quality_changed(index: int)
+signal resume_requested
+signal restart_requested
+signal main_menu_requested
 signal sandbox_action_requested(action: String, payload: Dictionary)
 
 const RadarScript = preload("res://scripts/radar.gd")
@@ -29,8 +32,13 @@ var _toast_timer := 0.0
 var _hit_marker: Control
 var _hit_timer := 0.0
 var _pause_panel: PanelContainer
+var _pause_overlay: ColorRect
+var _resume_button: Button
+var _restart_button: Button
+var _main_menu_button: Button
 var _menu_overlay: ColorRect
 var _mode_select: OptionButton
+var _mode_description: Label
 var _map_select: OptionButton
 var _difficulty_select: OptionButton
 var _quality_select: OptionButton
@@ -204,23 +212,19 @@ func _build_buy_menu() -> void:
 	title.add_theme_font_size_override("font_size", 17)
 	title.custom_minimum_size.y = 30
 	box.add_child(title)
-	for entry in [
-		["knife", "COMBAT KNIFE", 0], ["machete", "MACHETE", 0], ["baseball_bat", "BASEBALL BAT", 0],
-		["crowbar", "CROWBAR", 0], ["fire_axe", "FIRE AXE", 0], ["sledgehammer", "SLEDGEHAMMER", 0],
-		["sidearm", "SIDEARM", 0], ["vanguard", "VANGUARD REVOLVER", 850], ["smg", "COMPACT SMG", 1250], ["whisper", "WHISPER SMG", 1550],
-		["ranger", "RANGER RIFLE", 2700], ["sentinel", "SENTINEL CARBINE", 2950], ["hammer", "HAMMER BATTLE RIFLE", 3200],
-		["breacher", "BREACHER", 2100], ["cyclone", "CYCLONE AUTO-SHOTGUN", 2850], ["marksman", "MARKSMAN", 3300],
-		["heavy_sniper", "HEAVY SNIPER", 4700], ["bulwark", "BULWARK LMG", 3900], ["frag", "FRAG", 300], ["smoke", "SMOKE", 300],
-		["flash", "FLASH", 250], ["incendiary", "INCENDIARY", 500]
-	]:
+	for key in LocalStrikeWeaponCatalog.sandbox_weapon_keys():
+		var spec := LocalStrikeWeaponCatalog.get_weapon(key)
 		var button := Button.new()
-		button.text = "%s    $%d" % [entry[1], entry[2]]
+		button.text = "%s    $%d" % [spec.display_name, spec.price]
+		button.tooltip_text = "%s | MAG %d | RELOAD %.2fs" % [spec.display_name, spec.magazine, spec.reload_time]
 		button.custom_minimum_size = Vector2(280, 36)
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		var key: String = entry[0]
-		button.pressed.connect(func(): buy_requested.emit(key))
+		button.pressed.connect(_emit_buy.bind(key))
 		box.add_child(button)
-		_buy_buttons[key] = {"button": button, "name": entry[1], "price": entry[2]}
+		_buy_buttons[key] = {"button": button, "name": spec.display_name, "price": spec.price}
+
+func _emit_buy(key: String) -> void:
+	buy_requested.emit(key)
 
 func _build_sandbox_tools() -> void:
 	_sandbox_panel = PanelContainer.new()
@@ -400,13 +404,36 @@ func _sandbox_tool_button(label: String, action: String) -> Button:
 	return button
 
 func _build_pause_and_scoreboard() -> void:
-	_pause_panel = _center_panel(Vector2(420, 180))
-	var pause_label := Label.new()
-	pause_label.text = "PAUSED\n\nESC / P  resume       F2  restart"
-	pause_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	pause_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	pause_label.add_theme_font_size_override("font_size", 21)
-	_pause_panel.add_child(pause_label)
+	_pause_overlay = ColorRect.new()
+	_pause_overlay.color = Color(0.015, 0.025, 0.035, 0.8)
+	_pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_root.add_child(_pause_overlay)
+	_pause_panel = _center_panel(Vector2(430, 326))
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 24)
+	_pause_panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	margin.add_child(box)
+	var title := Label.new()
+	title.text = "PAUSE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	box.add_child(title)
+	_resume_button = _menu_button("WEITERSPIELEN  [ESC]", func(): resume_requested.emit())
+	_restart_button = _menu_button("MATCH NEU STARTEN  [F2]", func(): restart_requested.emit())
+	_main_menu_button = _menu_button("ZURÜCK ZUM HAUPTMENÜ", func(): main_menu_requested.emit())
+	for button in [_resume_button, _restart_button, _main_menu_button]:
+		button.custom_minimum_size.y = 48
+		box.add_child(button)
+	var hint := Label.new()
+	hint.text = "Hauptmenü beendet das laufende Match."
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 13)
+	box.add_child(hint)
+	_pause_overlay.visible = false
 	_pause_panel.visible = false
 	_scoreboard = _center_panel(Vector2(680, 460))
 	_scoreboard_text = Label.new()
@@ -444,11 +471,13 @@ func _build_main_menu() -> void:
 	title.custom_minimum_size.y = 52
 	box.add_child(title)
 	var subtitle := Label.new()
-	subtitle.text = "TACTICAL OPERATIONS"
+	_mode_description = subtitle
+	subtitle.text = "Choose a mode and deploy"
+	subtitle.add_theme_font_size_override("font_size", 13)
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_color_override("font_color", Color("56d8c5"))
 	box.add_child(subtitle)
-	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH", "SANDBOX - ABANDONED FOUNDRY"])
+	_mode_select = _option(["DEFUSAL - BEST OF 7", "TEAM DEATHMATCH", "SANDBOX - ABANDONED FOUNDRY", "ARSENAL - TEAM WEAPON RACE"])
 	_mode_select.item_selected.connect(_on_mode_selected)
 	_map_select = _option(["HARBOR YARD", "TRAIN DEPOT", "SOLAR LAB", "OLD QUARTER", "FROSTLINE STATION", "ABANDONED FOUNDRY"])
 	_difficulty_select = _option(["RECRUIT BOTS", "VETERAN BOTS", "ELITE BOTS"])
@@ -457,12 +486,13 @@ func _build_main_menu() -> void:
 	_quality_select.item_selected.connect(func(index: int): quality_changed.emit(index))
 	for control in [_mode_select, _map_select, _difficulty_select, _quality_select]:
 		box.add_child(control)
-	_mode_select.select(LocalStrikeMatchConfig.Mode.SANDBOX)
-	_map_select.select(5)
+	_mode_select.select(LocalStrikeMatchConfig.Mode.ARSENAL)
+	_map_select.select(0)
 	box.add_child(_menu_button("PLAY SOLO", _emit_solo))
 	_host_button = _menu_button("HOST LAN - 5v5", _emit_host)
 	_host_button.disabled = true
 	box.add_child(_host_button)
+	_on_mode_selected(_mode_select.selected)
 	var server_row := HBoxContainer.new()
 	server_row.add_theme_constant_override("separation", 8)
 	box.add_child(server_row)
@@ -503,7 +533,10 @@ func _emit_host() -> void:
 	host_requested.emit(_mode_select.selected, _map_select.selected, _difficulty_select.selected)
 
 func _on_mode_selected(index: int) -> void:
-	_host_button.disabled = index == LocalStrikeMatchConfig.Mode.SANDBOX
+	_map_select.set_item_disabled(5, index != LocalStrikeMatchConfig.Mode.SANDBOX)
+	_host_button.disabled = index in [LocalStrikeMatchConfig.Mode.SANDBOX, LocalStrikeMatchConfig.Mode.ARSENAL]
+	_host_button.tooltip_text = "Local solo with bots" if _host_button.disabled else "Host a game on your local network"
+	_mode_description.text = ["Plant or defuse. First team to 4 rounds wins.", "Free loadouts. First to 40 kills, or 8 minutes.", "Build, spawn and experiment in the Foundry.", "8 weapon stages. 3 team kills each. Local 5v5 bots."][index]
 	if index == LocalStrikeMatchConfig.Mode.SANDBOX:
 		_map_select.select(5)
 		_map_select.disabled = true
@@ -609,12 +642,20 @@ func show_flash(intensity: float) -> void:
 
 func set_paused(value: bool) -> void:
 	_pause_panel.visible = value
+	_pause_overlay.visible = value
+	if value:
+		_scoreboard.visible = false
+		_resume_button.grab_focus()
 
 func set_scoreboard(value: bool) -> void:
 	_scoreboard.visible = value
 
 func set_deployed(value: bool) -> void:
 	_menu_overlay.visible = not value
+	if not value:
+		set_paused(false)
+		_scoreboard.visible = false
+		_buy_panel.visible = false
 
 func _anchored_label(position: Vector2, label_size: Vector2, font_size: int, alignment: int, anchor_x := 0.0) -> Label:
 	var label := Label.new()

@@ -14,19 +14,25 @@ static func get_weapon(key: String) -> LocalStrikeWeaponDefinition:
 	return all().get(key, all()["sidearm"])
 
 static func primary_keys() -> Array[String]:
-	return ["smg", "whisper", "ranger", "sentinel", "hammer", "breacher", "cyclone", "marksman", "heavy_sniper", "bulwark"]
+	return ["smg", "whisper", "ranger", "sentinel", "hammer", "breacher", "cyclone", "doublebarrel", "marksman", "longbow", "heavy_sniper", "bulwark"]
+
+static func secondary_keys() -> Array[String]:
+	return ["sidearm", "vanguard", "kestrel"]
 
 static func melee_keys() -> Array[String]:
 	return ["knife", "machete", "baseball_bat", "crowbar", "fire_axe", "sledgehammer"]
 
 static func bot_weapon_keys() -> Array[String]:
-	return ["sidearm", "vanguard"] + primary_keys() + melee_keys()
+	return secondary_keys() + primary_keys() + melee_keys()
 
 static func sandbox_weapon_keys() -> Array[String]:
-	return melee_keys() + ["sidearm", "vanguard"] + primary_keys() + ["frag", "smoke", "flash", "incendiary"]
+	return melee_keys() + secondary_keys() + primary_keys() + ["frag", "smoke", "flash", "incendiary"]
 
 static func _build() -> void:
 	_weapons = {
+		"kestrel": Definition.create({"key": "kestrel", "display_name": "KESTREL AUTO PISTOL", "slot": Definition.Slot.SECONDARY, "price": 900, "damage": 18.0, "head_multiplier": 3.0, "spread": 0.025, "move_spread": 0.035, "range": 30.0, "magazine": 20, "reserve": 80, "fire_delay": 0.07, "reload_time": 1.45, "fire_modes": ["auto", "semi"], "recoil_pattern": [Vector2(-0.009, 0.017), Vector2(0.013, 0.021), Vector2(-0.016, 0.025), Vector2(0.019, 0.028)], "category": "pistol", "penetration_power": 0.32, "armor_penetration": 0.38, "falloff_start": 9.0, "falloff_end": 30.0, "minimum_damage_multiplier": 0.42, "ads_fov": 66.0, "weight": 0.82, "sound_profile": "pistol"}),
+		"doublebarrel": Definition.create({"key": "doublebarrel", "display_name": "OUTLAW DOUBLE BARREL", "price": 1600, "damage": 14.0, "head_multiplier": 1.3, "spread": 0.105, "move_spread": 0.05, "range": 16.0, "magazine": 2, "reserve": 30, "fire_delay": 0.24, "reload_time": 2.35, "pellets": 10, "automatic": false, "fire_modes": ["semi"], "recoil_pattern": [Vector2(-0.012, 0.085), Vector2(0.016, 0.095)], "category": "shotgun", "penetration_power": 0.25, "armor_penetration": 0.28, "falloff_start": 4.0, "falloff_end": 17.0, "minimum_damage_multiplier": 0.22, "ads_fov": 65.0, "weight": 0.95, "shot_impulse": 8.0, "sound_profile": "shotgun"}),
+		"longbow": Definition.create({"key": "longbow", "display_name": "LONGBOW SCOUT", "price": 2200, "damage": 68.0, "head_multiplier": 2.6, "spread": 0.003, "move_spread": 0.06, "range": 95.0, "magazine": 8, "reserve": 32, "fire_delay": 0.9, "reload_time": 1.7, "automatic": false, "fire_modes": ["bolt"], "recoil_pattern": [Vector2(0.006, 0.048), Vector2(-0.008, 0.052)], "category": "sniper", "penetration_power": 1.2, "armor_penetration": 0.76, "falloff_start": 45.0, "falloff_end": 100.0, "minimum_damage_multiplier": 0.75, "ads_fov": 32.0, "weight": 0.9, "shot_impulse": 5.0, "sound_profile": "sniper"}),
 		"knife": Definition.create({"key": "knife", "display_name": "COMBAT KNIFE", "slot": Definition.Slot.MELEE, "damage": 38.0, "range": 1.95, "magazine": 1, "reserve": 0, "fire_delay": 0.38, "reload_time": 0.0, "automatic": false, "fire_modes": ["melee"], "recoil_pitch": 0.0, "recoil_yaw": 0.0, "category": "knife", "penetration_power": 0.0, "weight": 0.72, "melee_type": "sharp", "melee_reach": 1.95, "melee_arc_degrees": 64.0, "melee_light_damage": 38.0, "melee_heavy_damage": 72.0, "melee_light_recovery": 0.38, "melee_heavy_recovery": 0.72, "melee_max_targets": 2, "melee_impulse": 5.5, "blood_multiplier": 1.0}),
 		"machete": Definition.create({"key": "machete", "display_name": "MACHETE", "slot": Definition.Slot.MELEE, "damage": 58.0, "range": 2.25, "magazine": 1, "reserve": 0, "fire_delay": 0.56, "reload_time": 0.0, "automatic": false, "fire_modes": ["melee"], "category": "machete", "weight": 0.92, "melee_type": "sharp", "melee_reach": 2.25, "melee_arc_degrees": 82.0, "melee_light_damage": 58.0, "melee_heavy_damage": 105.0, "melee_light_recovery": 0.56, "melee_heavy_recovery": 0.9, "melee_max_targets": 2, "melee_impulse": 7.0, "blood_multiplier": 1.5}),
 		"baseball_bat": Definition.create({"key": "baseball_bat", "display_name": "BASEBALL BAT", "slot": Definition.Slot.MELEE, "damage": 44.0, "range": 2.3, "magazine": 1, "reserve": 0, "fire_delay": 0.62, "reload_time": 0.0, "automatic": false, "fire_modes": ["melee"], "category": "baseball_bat", "weight": 1.0, "melee_type": "blunt", "melee_reach": 2.3, "melee_arc_degrees": 96.0, "melee_light_damage": 44.0, "melee_heavy_damage": 80.0, "melee_light_recovery": 0.62, "melee_heavy_recovery": 0.96, "melee_max_targets": 3, "melee_impulse": 12.0, "blood_multiplier": 0.78}),

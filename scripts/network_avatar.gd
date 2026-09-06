@@ -1,6 +1,9 @@
 class_name LocalStrikeNetworkAvatar
 extends CharacterBody3D
 
+const VisualActor = preload("res://scripts/enemy.gd")
+const Catalog = preload("res://scripts/weapon_catalog.gd")
+
 signal damaged(peer_id: int, amount: float, hit_zone: String)
 signal eliminated(peer_id: int)
 
@@ -13,12 +16,9 @@ var weapon_name := "SIDEARM"
 var target_position := Vector3.ZERO
 var target_rotation_y := 0.0
 var _body_root: Node3D
-var _weapon: MeshInstance3D
-var _left_leg: MeshInstance3D
-var _right_leg: MeshInstance3D
-var _left_arm: MeshInstance3D
-var _right_arm: MeshInstance3D
-var _walk_phase := 0.0
+var _weapon: Node3D
+var _visual_actor: LocalStrikeEnemy
+var _visual_weapon_key := "sidearm"
 
 func configure(id: int, next_team: int) -> void:
 	peer_id = id
@@ -37,19 +37,24 @@ func _physics_process(delta: float) -> void:
 	var previous := global_position
 	global_position = global_position.lerp(target_position, minf(1.0, delta * 14.0))
 	rotation.y = lerp_angle(rotation.y, target_rotation_y, minf(1.0, delta * 16.0))
-	var speed := previous.distance_to(global_position) / maxf(delta, 0.001)
-	_walk_phase += delta * speed * 4.0
-	var swing := sin(_walk_phase) * minf(26.0, speed * 8.0)
-	_left_leg.rotation_degrees.x = swing
-	_right_leg.rotation_degrees.x = -swing
-	_left_arm.rotation_degrees.x = -16.0 - swing * 0.32
-	_right_arm.rotation_degrees.x = -31.0 + swing * 0.2
+	_visual_actor.velocity = (global_position - previous) / maxf(delta, 0.001)
+	_visual_actor.health = health
+	_visual_actor._animate_body(delta)
 
 func apply_snapshot(position: Vector3, yaw: float, next_health: float, next_weapon: String) -> void:
 	target_position = position
 	target_rotation_y = yaw
 	health = next_health
 	weapon_name = next_weapon
+	var next_key := "sidearm"
+	for key in Catalog.all():
+		if Catalog.get_weapon(key).display_name == next_weapon:
+			next_key = key
+			break
+	if next_key != _visual_weapon_key and _visual_actor != null:
+		_visual_weapon_key = next_key
+		_visual_actor.equip_arsenal_weapon(next_key)
+		_weapon = _visual_actor._held_weapon
 
 func take_damage(amount: float, hit_zone := "torso", _context := {}) -> bool:
 	return take_ballistic_damage(amount, hit_zone, 0.0)
@@ -105,69 +110,18 @@ func _add_hitbox(zone: String, position: Vector3, size: Vector3, sphere := false
 	add_child(area)
 
 func _build_visual() -> void:
-	_body_root = Node3D.new()
-	add_child(_body_root)
-	var team_color := Color("397080") if team == 0 else Color("8d4547")
-	var uniform := _material(team_color, 0.62, 0.05)
-	var armor := _material(team_color.darkened(0.38), 0.4, 0.35)
-	var dark := _material(Color("182127"), 0.45, 0.42)
-	_add_box(Vector3(0.58, 0.62, 0.36), Vector3(0, 1.02, 0), uniform)
-	_add_box(Vector3(0.66, 0.3, 0.42), Vector3(0, 1.12, 0), armor)
-	_left_leg = _add_capsule(0.11, 0.78, Vector3(-0.18, 0.4, 0), dark)
-	_right_leg = _add_capsule(0.11, 0.78, Vector3(0.18, 0.4, 0), dark)
-	_left_arm = _add_capsule(0.095, 0.68, Vector3(-0.4, 1.02, -0.04), uniform)
-	_right_arm = _add_capsule(0.095, 0.68, Vector3(0.4, 1.02, -0.04), uniform)
-	var head := MeshInstance3D.new()
-	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.22
-	head_mesh.height = 0.44
-	head_mesh.radial_segments = 14
-	head_mesh.rings = 7
-	head.mesh = head_mesh
-	head.position = Vector3(0, 1.55, 0)
-	head.material_override = _material(Color("a98a72"), 0.75, 0.0)
-	_body_root.add_child(head)
-	_add_box(Vector3(0.42, 0.1, 0.08), Vector3(0, 1.58, -0.2), dark)
-	var helmet := MeshInstance3D.new()
-	var helmet_mesh := SphereMesh.new()
-	helmet_mesh.radius = 0.235
-	helmet_mesh.height = 0.3
-	helmet_mesh.radial_segments = 16
-	helmet_mesh.rings = 6
-	helmet.mesh = helmet_mesh
-	helmet.position = Vector3(0, 1.69, 0.01)
-	helmet.scale.y = 0.58
-	helmet.material_override = armor
-	_body_root.add_child(helmet)
-	_add_box(Vector3(0.42, 0.44, 0.14), Vector3(0, 1.03, 0.25), armor)
-	_weapon = _add_box(Vector3(0.12, 0.13, 0.68), Vector3(0.28, 1.02, -0.42), dark)
-
-func _add_box(size: Vector3, position: Vector3, material: Material) -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	instance.mesh = mesh
-	instance.position = position
-	instance.material_override = material
-	_body_root.add_child(instance)
-	return instance
-
-func _material(color: Color, roughness: float, metallic: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = roughness
-	material.metallic = metallic
-	return material
-
-func _add_capsule(radius: float, height: float, position: Vector3, material: Material) -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	var mesh := CapsuleMesh.new()
-	mesh.radius = radius
-	mesh.height = height
-	mesh.radial_segments = 12
-	mesh.rings = 4
-	instance.mesh = mesh
-	instance.position = position
-	instance.material_override = material
-	_body_root.add_child(instance)
-	return instance
+	# Reuse the rigged character and hand attachment without adding another actor.
+	_visual_actor = VisualActor.new()
+	_visual_actor.configure_spawn(team, "heavy", "sidearm", "passive", Vector3.ZERO)
+	_visual_actor.configure_network_replica("visual_only")
+	add_child(_visual_actor)
+	_visual_actor.set_physics_process(false)
+	_visual_actor.remove_from_group("damageable_actor")
+	_visual_actor.collision_layer = 0
+	_visual_actor.collision_mask = 0
+	for area in _visual_actor.find_children("*", "Area3D", true, false):
+		area.collision_layer = 0
+		area.collision_mask = 0
+	_visual_actor.health = health
+	_body_root = _visual_actor
+	_weapon = _visual_actor._held_weapon

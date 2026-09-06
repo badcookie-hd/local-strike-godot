@@ -18,13 +18,18 @@ func _capture() -> void:
 	var game = scene.instantiate()
 	root.add_child(game)
 	await process_frame
-	game._start_solo(requested_mode, map_index, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+	if requested_mode >= 0:
+		game._start_solo(requested_mode, map_index, LocalStrikeMatchConfig.Difficulty.RECRUIT)
+	if args.size() > 8 and requested_mode != LocalStrikeMatchConfig.Mode.ARSENAL:
+		game.player.grant_weapon(args[8])
 	game._apply_quality(profile)
 	if clean_hud:
 		game.show_buy = false
 	elif requested_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 		game.sandbox_browser.open_browser()
 		game.sandbox_browser._select_category(browser_category)
+	if args.size() > 5 and args[5] == "pause":
+		game._set_paused(true)
 	for frame in range(24):
 		await process_frame
 	game.hud._toast_label.visible = false

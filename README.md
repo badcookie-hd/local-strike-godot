@@ -1,15 +1,17 @@
 # Local Strike Godot
 
-Ein experimentelles Godot-4.7-Spiel mit taktischem Shooter- und lokalem Physik-Sandbox-Modus. Die Sandbox startet standardmaessig in **Abandoned Foundry**; Defusal, Team Deathmatch, Solo-Bots und LAN sind ebenfalls spielbar. Das Projekt verwendet eigene Logik und frei lizenzierte Assets.
+Ein experimentelles Godot-4.7-Spiel mit taktischem Shooter- und lokalem Physik-Sandbox-Modus. Neu: **Arsenal**, ein lokales Waffenrennen mit 5v5-Bots, sowie drei neue Schusswaffen. Das Hauptmenue waehlt Arsenal vor. Die Sandbox startet in **Abandoned Foundry**; Defusal, Team Deathmatch und LAN sind ebenfalls spielbar. Details: [Arsenal-Update](UPDATE_2026-09-06.md). Das Projekt verwendet eigene Logik und frei lizenzierte Assets.
 
 ![Abandoned Foundry in Forward+](docs/foundry-gameplay-1080p.png)
 
 ## Start
 
+Im Spiel oeffnet **Escape** das Pausenmenue. Dort kannst du **Weiterspielen**, **Match neu starten** oder **Zurueck zum Hauptmenue** waehlen. Das Hauptmenue beendet das aktuelle Match und trennt eine bestehende LAN-Verbindung. Details zur korrigierten Waffenhaltung: [Menue- und Waffen-Update](MENU_WEAPON_UPDATE.md).
+
 1. `START_GAME.cmd` startet Forward+ mit Vulkan und faellt bei einem Startfehler automatisch auf OpenGL zurueck.
 2. `START_GAME_COMPATIBILITY.cmd` erzwingt den reduzierten OpenGL-Modus.
 3. `OPEN_EDITOR.cmd` oeffnet das Projekt in Godot 4.7.
-4. `RUN_TESTS.cmd` startet Gameplay-, Sandbox-Grenz-, LAN-Socket- und ENet-RPC-Synchronisationstests.
+4. `RUN_TESTS.cmd` startet Gameplay-, Arsenal-, Sandbox-Grenz-, LAN-Socket- und ENet-RPC-Synchronisationstests.
 
 Godot kann ueber `PATH` gefunden oder portabel in `engine/` abgelegt werden. Die EXE selbst ist wegen GitHubs 100-MB-Dateigrenze nicht im Repository; Details stehen in `engine/README.md`.
 
@@ -22,7 +24,7 @@ Abandoned Foundry ist eine eigene Szene mit Haupthalle, Schmelzofen, Werkstatt, 
 Der sichtbare Button unten links oder `B` oeffnet den Spawn-Browser. Die sechs Tabs `Bots`, `Weapons`, `Melee`, `Grenades`, `Props` und `World` besitzen Suche, echte 3D-Vorschauen und eine Schnellleiste fuer zuletzt verwendete Objekte.
 
 - Bots: Team, Scout/Assault/Heavy, beliebige Bot-Waffe, Aggressiv/Wache/Passiv und Formation von 1 bis 10
-- Waffen: alle 22 Ausruestungsobjekte direkt ausruesten oder als aufhebbare Worldmodels platzieren
+- Waffen: alle 25 Ausruestungsobjekte direkt ausruesten oder als aufhebbare Worldmodels platzieren
 - Props: Holzkisten, Metallkisten, Brennstofffaesser und Werkzeugwagen mit echter RigidBody3D-Physik
 - Welt: God Mode, Zeitlupe, Explosion, Ziel entfernen, Kategorien leeren und kompletter Reset
 - Limits: 40 Bots, 64 eigene Physikprops, 32 liegende Waffen und 24 persistente Koerper
@@ -31,14 +33,14 @@ Beim Platzieren zeigt eine komplette, drehbare Vorschau die Formation. Gruen ist
 
 ## Waffen und Effekte
 
-- Zwoelf Schusswaffen, sechs Nahkampfwaffen und vier Granaten
+- Fuenfzehn Schusswaffen, sechs Nahkampfwaffen und vier Granaten
 - ADS, Feuerwahl, reproduzierbare Rueckstossmuster, Distanzabfall, Ruestungsdurchdringung, bis zu drei Materialdurchdringungen und ein Abpraller
 - Messer, Machete, Baseball Bat, Crowbar, Fire Axe und Sledgehammer mit getrennten leichten/schweren Angriffen, Trefferboegen und Impulsen
 - Aufhebbare und fallengelassene Waffen behalten Magazin und Blutverfaerbung
 - Frag, Rauch, Flash und Brandgranate mit Bounce, Sichtlinien und physikalischen Impulsen
 - Gerichtete Blutspritzer, wachsende Lachen, persistente Sandbox-Ragdolls und Qualitaetslimits ohne Zerstueckelung
 
-Zwoelf Feuerwaffen sowie Messer, Machete, Axt und Hammer verwenden lokale Quaternius-CC0-Modelle. Baseball Bat, Crowbar und Granaten besitzen getrennte Godot-native Modelle. Bots verwenden drei riggte Quaternius-Charaktere mit Lauf-, Schuss-, Nahkampf- und Todesanimationen.
+Zwoelf Feuerwaffen sowie Messer, Machete, Axt und Hammer verwenden lokale Quaternius-CC0-Modelle. Kestrel, Outlaw, Longbow, Baseball Bat, Crowbar und Granaten besitzen getrennte Godot-native Modelle. Bots verwenden drei riggte Quaternius-Charaktere mit Lauf-, Schuss-, Nahkampf- und Todesanimationen.
 
 ## Weitere Modi
 
@@ -47,7 +49,7 @@ Zwoelf Feuerwaffen sowie Messer, Machete, Axt und Hammer verwenden lokale Quater
 - Fuenf kompetitive Karten: Harbor Yard, Train Depot, Solar Lab, Old Quarter und Frostline Station
 - LAN: ENet auf UDP `27888`, lokale Suche auf UDP `27889`, direkte IP als Fallback
 
-Sandbox bleibt bewusst lokal. LAN-Schaden und Nahkampftreffer in den kompetitiven Modi bleiben host-autoritativ.
+Sandbox und Arsenal sind lokal mit Bots spielbar. LAN-Schaden und Nahkampftreffer in den kompetitiven Modi bleiben host-autoritativ.
 
 ## Grafik und Assets
 
@@ -71,10 +73,10 @@ Sandbox bleibt bewusst lokal. LAN-Schaden und Nahkampftreffer in den kompetitive
 | `E` | Interagieren, pflanzen oder entschaerfen |
 | `B` | Spawn-Browser beziehungsweise Kaufmenue |
 | Linksklick / Rechtsklick / Mausrad | Platzieren / abbrechen / Vorschau drehen |
-| `Tab`, `Escape`, `F2` | Scoreboard, Pause, Match neu starten |
+| `Tab`, `Escape`, `F2` | Scoreboard, Pausenmenue mit Hauptmenue-Button, Match neu starten |
 
 ## Abnahme
 
-`RUN_TESTS.cmd` prueft Parser und Laufzeit, alle 22 Ausruestungen, PBR-Dateien, Browser-Suche und Aktionen, exakte Bot-Konfiguration, Platzierung, Nahkampf, Effekte, 40/64/32-Objektgrenzen, Defusal und Deathmatch. Ein echter ENet-Test prueft zusaetzlich Host/Client-RPCs, 5v5-Bot-Auffuellung, Bot-Replikate und Spieler-Avatare.
+`RUN_TESTS.cmd` prueft Parser und Laufzeit, alle 25 Ausruestungen, PBR-Dateien, Browser-Suche und Aktionen, exakte Bot-Konfiguration, Platzierung, Nahkampf, Effekte, 40/64/32-Objektgrenzen, Defusal und Deathmatch. Ein echter ENet-Test prueft zusaetzlich Host/Client-RPCs, 5v5-Bot-Auffuellung, Bot-Replikate und Spieler-Avatare.
 
 Der 120-Sekunden-Benchmark auf einer RTX 3070 erreichte in Abandoned Foundry bei 1920x1080, Profil Hoch, zehn Bots und 13 Physikobjekten durchschnittlich **139,5 FPS**. Das Minimum-Sample lag bei **132 FPS**, keines der 474 Samples unter 55 FPS. Ergebnis: `docs/benchmark-foundry.json`.

@@ -23,6 +23,14 @@ echo Running Local Strike gameplay tests...
 "%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://test_runner.gd
 if errorlevel 1 goto failed
 
+echo Running Arsenal and new weapon tests...
+"%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://arsenal_test.gd
+if errorlevel 1 goto failed
+
+echo Running pause menu and weapon holding tests...
+"%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://menu_holding_test.gd
+if errorlevel 1 goto failed
+
 echo Running LAN socket tests...
 "%GODOT%" --disable-crash-handler --headless --rendering-method gl_compatibility --path "%PROJECT%" --script res://network_socket_test.gd
 if errorlevel 1 goto failed

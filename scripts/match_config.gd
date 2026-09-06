@@ -1,7 +1,7 @@
 class_name LocalStrikeMatchConfig
 extends Resource
 
-enum Mode { DEFUSAL, DEATHMATCH, SANDBOX }
+enum Mode { DEFUSAL, DEATHMATCH, SANDBOX, ARSENAL }
 enum Difficulty { RECRUIT, VETERAN, ELITE }
 
 @export var mode := Mode.DEFUSAL

@@ -5,6 +5,7 @@ const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
 const Ballistics = preload("res://scripts/ballistics_manager.gd")
 const MeleeResolver = preload("res://scripts/melee_resolver.gd")
 const WeaponModel = preload("res://scripts/weapon_model.gd")
+const HoldModifier = preload("res://scripts/weapon_hold_modifier.gd")
 
 const CHARACTER_MODELS := {
 	"scout": "res://assets/models/quaternius/modular_men/Punk.gltf",
@@ -65,6 +66,10 @@ var _muzzle: Marker3D
 var _walk_phase := 0.0
 var _configured_weapon := ""
 var _held_weapon: Node3D
+var _weapon_attachment: BoneAttachment3D
+var _weapon_mount: Node3D
+var _hold_modifier: HoldModifier
+var _skeleton: Skeleton3D
 var _attack_anim_timer := 0.0
 var _external_character: Node3D
 var _animation_player: AnimationPlayer
@@ -225,15 +230,49 @@ func _build_external_character() -> bool:
 	_apply_character_tint(_external_character)
 	_body_root.add_child(_external_character)
 	_animation_player = _external_character.find_child("AnimationPlayer", true, false) as AnimationPlayer
-	_play_character_animation("Idle_Gun" if WeaponCatalog.get_weapon(weapon_key).slot != LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Sword")
-	_held_weapon = WeaponModel.create(weapon_key)
-	_held_weapon.position = Vector3(0.34, 1.08, -0.38)
-	_held_weapon.scale = Vector3.ONE * (0.62 if WeaponCatalog.get_weapon(weapon_key).slot == LocalStrikeWeaponDefinition.Slot.MELEE else 0.54)
-	_body_root.add_child(_held_weapon)
-	_muzzle = Marker3D.new()
-	_muzzle.position = Vector3(0.34, 1.12, -1.25)
-	_body_root.add_child(_muzzle)
+	_skeleton = _external_character.find_child("Skeleton3D", true, false) as Skeleton3D
+	if _skeleton == null or _skeleton.find_bone("Wrist.R") < 0:
+		_external_character.queue_free()
+		_external_character = null
+		_animation_player = null
+		_skeleton = null
+		return false
+	_weapon_attachment = BoneAttachment3D.new()
+	_weapon_attachment.name = "WeaponHandAttachment"
+	_weapon_attachment.bone_name = "Wrist.R"
+	_skeleton.add_child(_weapon_attachment)
+	_weapon_mount = Node3D.new()
+	_weapon_mount.name = "WeaponGripMount"
+	_weapon_attachment.add_child(_weapon_mount)
+	_hold_modifier = HoldModifier.new()
+	_hold_modifier.actor = self
+	_hold_modifier.body_scale = _external_character.scale.x
+	_skeleton.add_child(_hold_modifier)
+	_setup_held_weapon()
 	return true
+
+func _setup_held_weapon() -> void:
+	var melee := WeaponCatalog.get_weapon(weapon_key).slot == LocalStrikeWeaponDefinition.Slot.MELEE
+	var reference_animation := "Idle_Sword" if melee else "Idle_Gun_Pointing"
+	_animation_player.play(reference_animation, 0.0)
+	_current_animation = reference_animation
+	_animation_player.advance(0.0)
+	var wrist := _skeleton.global_transform * _skeleton.get_bone_global_pose(_skeleton.find_bone("Wrist.R"))
+	var actor_basis := global_basis.orthonormalized()
+	_hold_modifier.weapon_key = weapon_key
+	_hold_modifier.right_basis = actor_basis.inverse() * wrist.basis.orthonormalized()
+	var grip := wrist.origin + actor_basis * _hold_modifier.hand_offset * _external_character.scale.x
+	var direction := actor_basis * (Basis(Vector3.RIGHT, -0.4) if melee else Basis.IDENTITY)
+	_weapon_mount.transform = wrist.affine_inverse() * Transform3D(direction.scaled(Vector3.ONE * 0.82), grip)
+	if is_instance_valid(_held_weapon):
+		_weapon_mount.remove_child(_held_weapon)
+		_held_weapon.queue_free()
+	_held_weapon = WeaponModel.create(weapon_key)
+	_weapon_mount.add_child(_held_weapon)
+	_hold_modifier.support_offset = _held_weapon.get_meta("support")
+	_muzzle = Marker3D.new()
+	_muzzle.position = _held_weapon.get_meta("muzzle")
+	_held_weapon.add_child(_muzzle)
 
 func _apply_character_tint(node: Node) -> void:
 	if node is MeshInstance3D:
@@ -386,6 +425,7 @@ func _can_see_player() -> bool:
 
 func _shoot(distance: float) -> void:
 	var spec := WeaponCatalog.get_weapon(weapon_key)
+	_attack_anim_timer = 0.16
 	var uses_ads := distance > preferred_distance * 0.8
 	_shoot_cooldown = maxf(fire_delay * 0.45, spec.fire_delay * (1.08 if uses_ads else 1.25)) + randf_range(0.0, 0.12)
 	var origin := _muzzle.global_position
@@ -434,12 +474,29 @@ func clear_weapon_blood() -> void:
 	var old_position := _held_weapon.position
 	var old_rotation := _held_weapon.rotation
 	var old_scale := _held_weapon.scale
-	_held_weapon.queue_free()
+	var holder := _held_weapon.get_parent()
+	var old_weapon := _held_weapon
 	_held_weapon = WeaponModel.create(weapon_key, 0.0)
 	_held_weapon.position = old_position
 	_held_weapon.rotation = old_rotation
 	_held_weapon.scale = old_scale
-	_body_root.add_child(_held_weapon)
+	holder.add_child(_held_weapon)
+	if is_instance_valid(_muzzle):
+		_muzzle.reparent(_held_weapon, false)
+		_muzzle.position = _held_weapon.get_meta("muzzle")
+	holder.remove_child(old_weapon)
+	old_weapon.queue_free()
+
+func equip_arsenal_weapon(key: String) -> void:
+	weapon_key = key
+	var spec := WeaponCatalog.get_weapon(key)
+	preferred_distance = spec.melee_reach * 0.72 if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else clampf(spec.range * 0.22, 3.0, 14.0)
+	fire_delay = spec.melee_light_recovery if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else 0.7
+	_shoot_cooldown = maxf(_shoot_cooldown, spec.equip_time)
+	if _weapon_mount != null:
+		_setup_held_weapon()
+	else:
+		clear_weapon_blood()
 
 func _stain_held_weapon(amount: float) -> void:
 	if not is_instance_valid(_held_weapon):
@@ -525,15 +582,12 @@ func _animate_body(delta: float) -> void:
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
 	if _animation_player != null:
 		var spec := WeaponCatalog.get_weapon(weapon_key)
-		var animation := "Idle_Sword" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Gun"
+		var animation := "Idle_Sword" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Gun_Pointing"
 		if _attack_anim_timer > 0.0:
-			animation = "Sword_Slash" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Gun_Shoot"
+			animation = "Sword_Slash" if spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE else "Idle_Gun_Shoot"
 		elif horizontal_speed > 0.4:
 			animation = "Run" if horizontal_speed > 2.6 else "Walk"
 		_play_character_animation(animation)
-		if is_instance_valid(_held_weapon):
-			var target_roll := sin((_attack_anim_timer / maxf(0.01, fire_delay)) * PI) * 0.9 if _attack_anim_timer > 0.0 else 0.0
-			_held_weapon.rotation.z = lerpf(_held_weapon.rotation.z, target_roll, minf(1.0, delta * 15.0))
 		return
 	_walk_phase += delta * horizontal_speed * 4.2
 	var swing := sin(_walk_phase) * minf(28.0, horizontal_speed * 9.0)

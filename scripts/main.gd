@@ -4,6 +4,7 @@ const PlayerScript = preload("res://scripts/player.gd")
 const EnemyScript = preload("res://scripts/enemy.gd")
 const HUDScript = preload("res://scripts/hud.gd")
 const WeaponCatalog = preload("res://scripts/weapon_catalog.gd")
+const ArsenalRules = preload("res://scripts/arsenal_rules.gd")
 const GrenadeScript = preload("res://scripts/grenade.gd")
 const SmokeScript = preload("res://scripts/smoke_cloud.gd")
 const NetworkAvatarScript = preload("res://scripts/network_avatar.gd")
@@ -104,9 +105,11 @@ func _ready() -> void:
 
 	level_root = Node3D.new()
 	level_root.name = "Level"
+	level_root.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(level_root)
 	effect_root = Node3D.new()
 	effect_root.name = "Effects"
+	effect_root.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(effect_root)
 	effects = EffectsManagerScript.new()
 	effects.name = "ImpactEffects"
@@ -114,6 +117,7 @@ func _ready() -> void:
 
 	player = PlayerScript.new()
 	player.name = "Player"
+	player.process_mode = Node.PROCESS_MODE_PAUSABLE
 	player.enabled = false
 	player.shot_fired.connect(_on_shot_fired)
 	player.shot_requested.connect(_on_player_shot_requested)
@@ -136,6 +140,9 @@ func _ready() -> void:
 	hud.refresh_servers_requested.connect(_refresh_servers)
 	hud.buy_requested.connect(_buy_weapon)
 	hud.quality_changed.connect(_apply_quality)
+	hud.resume_requested.connect(func(): _set_paused(false))
+	hud.restart_requested.connect(_restart_match)
+	hud.main_menu_requested.connect(_return_to_main_menu)
 	hud.sandbox_action_requested.connect(_on_sandbox_action)
 	add_child(hud)
 	sandbox_spawn_controller = SandboxSpawnControllerScript.new()
@@ -161,7 +168,7 @@ func _ready() -> void:
 	_update_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("scoreboard"):
+	if event.is_action_pressed("scoreboard") and started and not paused:
 		hud.set_scoreboard(true)
 	elif event.is_action_released("scoreboard"):
 		hud.set_scoreboard(false)
@@ -179,6 +186,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("drop_weapon"):
 		_handle_weapon_pickup_or_drop()
 	if event.is_action_pressed("toggle_buy"):
+		if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+			hud.show_toast("ARSENAL: 3 team eliminations advance your weapon", 2.0)
+			return
 		if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 			sandbox_browser.toggle_browser()
 		else:
@@ -222,7 +232,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_update_network_state(delta)
 	_update_spectator()
-	if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
+	if game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.ARSENAL]:
 		_update_deathmatch(delta)
 		_update_hud()
 		return
@@ -270,8 +280,8 @@ func _start_solo(mode: int, map_index: int, difficulty: int) -> void:
 	_start_configured_match(config)
 
 func _start_host(mode: int, map_index: int, difficulty: int) -> void:
-	if mode == LocalStrikeMatchConfig.Mode.SANDBOX:
-		hud.show_toast("Sandbox is available in local solo play", 3.5)
+	if mode in [LocalStrikeMatchConfig.Mode.SANDBOX, LocalStrikeMatchConfig.Mode.ARSENAL]:
+		hud.show_toast("This mode is available in local solo play", 3.5)
 		return
 	var config := LocalStrikeMatchConfig.new()
 	network_spawn_slot = 0
@@ -303,6 +313,15 @@ func _refresh_servers() -> void:
 func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	Engine.time_scale = 1.0
 	game_mode = config.mode
+	_set_paused(false)
+	player.combat_input_blocked = false
+	player.inventory = {"knife": true, "sidearm": true}
+	player.ammo_state.clear()
+	player.primary_key = ""
+	player.secondary_key = "sidearm"
+	player.melee_key = "knife"
+	player.grenade_key = ""
+	player.equip_weapon("sidearm", false)
 	level_index = levels.size() - 1 if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else clampi(config.map_index, 0, levels.size() - 2)
 	bot_difficulty = config.bot_difficulty
 	attack_score = 0
@@ -325,6 +344,8 @@ func _start_configured_match(config: LocalStrikeMatchConfig) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_reset_round(false)
 	var mode_name := "DEFUSAL" if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else ("TEAM DEATHMATCH" if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH else "SANDBOX")
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		mode_name = "ARSENAL - 8 STAGES / 3 TEAM KILLS EACH"
 	hud.show_toast("%s - %s" % [mode_name, current_level.map_name], 3.2)
 
 func _restart_match() -> void:
@@ -337,6 +358,8 @@ func _restart_match() -> void:
 	player.clear_weapon_blood()
 	player.equip_weapon("sidearm", false)
 	_set_paused(false)
+	match_over = false
+	deathmatch_timer = 480.0
 	started = true
 	player.enabled = true
 	hud.set_deployed(true)
@@ -346,17 +369,70 @@ func _restart_match() -> void:
 	hud.show_toast("Match restarted")
 
 func _set_paused(value: bool) -> void:
+	if value:
+		show_buy = false
+		sandbox_spawn_controller.cancel_placement(false)
+		sandbox_browser.set_sandbox_active(false)
+	elif started and game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
+		sandbox_browser.set_sandbox_active(true)
 	paused = value
 	get_tree().paused = value
 	hud.set_paused(value)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if value else Input.MOUSE_MODE_CAPTURED
 
+func _return_to_main_menu() -> void:
+	started = false
+	player.enabled = false
+	show_buy = false
+	match_over = false
+	Engine.time_scale = 1.0
+	sandbox_slow_motion = false
+	sandbox_spawn_controller.cancel_placement(false)
+	sandbox_browser.set_sandbox_active(false)
+	_set_paused(false)
+	NetworkManager.leave_game()
+	NetworkManager.stop_discovery()
+	GameSession.reset_roster()
+	pending_respawns.clear()
+	player_respawn_timer = 0.0
+	player_dead = false
+	spectator_target = null
+	spectator_camera.current = false
+	player.set_view_active(true)
+	player.combat_input_blocked = false
+	for child in level_root.get_children():
+		level_root.remove_child(child)
+		child.queue_free()
+	enemies.clear()
+	allies.clear()
+	remote_avatars.clear()
+	replicated_bots.clear()
+	interactables.clear()
+	physics_props.clear()
+	dropped_weapons.clear()
+	sandbox_ragdolls.clear()
+	sites.clear()
+	effects.clear_blood()
+	for child in effect_root.get_children():
+		if child != effects:
+			effect_root.remove_child(child)
+			child.queue_free()
+	for decal in effects.bullet_decals:
+		if is_instance_valid(decal): decal.queue_free()
+	effects.bullet_decals.clear()
+	AudioManager.stop_all()
+	hud.set_deployed(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
 func _reset_round(show_message: bool) -> void:
+	pending_respawns.clear()
+	player_respawn_timer = 0.0
+	spectator_target = null
 	round_no += 1
 	player_team = 0 if round_no <= 3 or game_mode != LocalStrikeMatchConfig.Mode.DEFUSAL else 1
 	phase = Phase.LIVE if game_mode != LocalStrikeMatchConfig.Mode.DEFUSAL else Phase.BUY
-	show_buy = false if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else true
-	phase_timer = 105.0
+	show_buy = game_mode not in [LocalStrikeMatchConfig.Mode.SANDBOX, LocalStrikeMatchConfig.Mode.ARSENAL]
+	phase_timer = deathmatch_timer if game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.ARSENAL] else 105.0
 	freeze_timer = 12.0
 	round_end_timer = 0.0
 	plant_progress = 0.0
@@ -382,6 +458,8 @@ func _reset_round(show_message: bool) -> void:
 	player.set_view_active(true)
 	spectator_camera.current = false
 	_spawn_teams()
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		_apply_arsenal_loadouts()
 	if show_message:
 		hud.show_toast("Round %d: %s" % [round_no, current_level.map_name])
 
@@ -475,6 +553,8 @@ func _spawn_bot(team: int, index: int, position: Vector3, spawn_config := {}) ->
 	var kind := str(spawn_config.get("kind", default_kind))
 	var default_weapon := "bulwark" if kind == "heavy" else ("whisper" if kind == "scout" else "sentinel")
 	var weapon := str(spawn_config.get("weapon", default_weapon))
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		weapon = ArsenalRules.weapon_for_score(attack_score if team == 0 else defense_score)
 	var behavior := str(spawn_config.get("behavior", "aggressive"))
 	bot.configure_spawn(team, kind, weapon, behavior, position)
 	var typed_patrols: Array[Vector3] = []
@@ -486,6 +566,8 @@ func _spawn_bot(team: int, index: int, position: Vector3, spawn_config := {}) ->
 	bot.melee_impact.connect(_on_enemy_melee_impact)
 	level_root.add_child(bot)
 	bot.global_position = position
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		bot.equip_arsenal_weapon(weapon)
 	return bot
 
 func _refresh_bot_opponents() -> void:
@@ -583,14 +665,12 @@ func _end_round(attack_wins: bool, reason: String) -> void:
 	hud.show_toast("%s wins: %s" % ["ATTACK" if attack_wins else "DEFENSE", reason], 3.2)
 
 func _finish_match() -> void:
-	Engine.time_scale = 1.0
-	started = false
-	player.enabled = false
-	hud.set_deployed(false)
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_return_to_main_menu()
 	hud.show_toast("MATCH COMPLETE  %d : %d" % [attack_score, defense_score], 5.0)
 
 func _buy_weapon(key: String) -> void:
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		return
 	var spec := WeaponCatalog.get_weapon(key)
 	if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL and spec.slot == LocalStrikeWeaponDefinition.Slot.MELEE and key != "knife":
 		hud.show_toast("Sandbox melee weapons are unavailable in Defusal", 1.8)
@@ -599,6 +679,8 @@ func _buy_weapon(key: String) -> void:
 	hud.show_toast(message)
 
 func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: String) -> void:
+	if match_over or not started:
+		return
 	var was_opponent := enemies.has(enemy)
 	var hit_context: Dictionary = enemy.last_hit_context
 	var hit_direction: Vector3 = hit_context.get("direction", (position - player.global_position).normalized())
@@ -627,12 +709,14 @@ func _on_enemy_died(enemy: LocalStrikeEnemy, position: Vector3, enemy_kind: Stri
 			defense_score += 1
 		_refresh_bot_opponents()
 		return
-	if game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
+	if game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.ARSENAL]:
 		if enemy.team == 1:
 			attack_score += 1
 		else:
 			defense_score += 1
 		pending_respawns.append({"time": 3.0, "team": enemy.team, "kind": enemy_kind, "position": position})
+		if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+			_arsenal_score_changed()
 		_refresh_bot_opponents()
 		return
 	if not _team_alive(1):
@@ -650,16 +734,20 @@ func _track_sandbox_ragdoll(ragdoll: Node3D) -> void:
 			oldest.queue_free()
 
 func _on_player_died() -> void:
+	if match_over:
+		return
 	player_dead = true
 	player.enabled = false
 	if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX:
 		player_respawn_timer = 1.5
-	elif game_mode == LocalStrikeMatchConfig.Mode.DEATHMATCH:
+	elif game_mode in [LocalStrikeMatchConfig.Mode.DEATHMATCH, LocalStrikeMatchConfig.Mode.ARSENAL]:
 		player_respawn_timer = 3.0
 		if player_team == 0:
 			defense_score += 1
 		else:
 			attack_score += 1
+		if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+			_arsenal_score_changed()
 	else:
 		_start_spectating()
 		if not _team_alive(player_team):
@@ -773,11 +861,9 @@ func _update_deathmatch(delta: float) -> void:
 		return
 	deathmatch_timer -= delta
 	phase_timer = deathmatch_timer
-	if deathmatch_timer <= 0.0 or attack_score >= 40 or defense_score >= 40:
-		match_over = true
-		round_end_timer = 3.0
-		player.enabled = false
-		hud.show_toast("DEATHMATCH COMPLETE  %d : %d" % [attack_score, defense_score], 3.0)
+	var score_limit := ArsenalRules.SCORE_LIMIT if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL else 40
+	if deathmatch_timer <= 0.0 or attack_score >= score_limit or defense_score >= score_limit:
+		_end_respawn_match()
 		return
 	if player_dead:
 		player_respawn_timer -= delta
@@ -788,6 +874,50 @@ func _update_deathmatch(delta: float) -> void:
 		if pending_respawns[i].time <= 0.0:
 			_respawn_bot(pending_respawns[i])
 			pending_respawns.remove_at(i)
+
+func _arsenal_score_changed() -> void:
+	if attack_score >= ArsenalRules.SCORE_LIMIT or defense_score >= ArsenalRules.SCORE_LIMIT:
+		_end_respawn_match()
+	else:
+		# Apply between attacks so a multi-pellet shot keeps its original weapon.
+		_apply_arsenal_loadouts.call_deferred()
+
+func _apply_arsenal_player_loadout() -> void:
+	var key := ArsenalRules.weapon_for_score(attack_score if player_team == 0 else defense_score)
+	player.inventory.clear()
+	player.ammo_state.clear()
+	player.primary_key = ""
+	player.secondary_key = ""
+	player.melee_key = ""
+	player.grenade_key = ""
+	player.grant_weapon(key)
+
+func _apply_arsenal_loadouts() -> void:
+	if game_mode != LocalStrikeMatchConfig.Mode.ARSENAL or match_over or not started:
+		return
+	var key := ArsenalRules.weapon_for_score(attack_score if player_team == 0 else defense_score)
+	if not player_dead and player.weapon_key != key:
+		_apply_arsenal_player_loadout()
+		hud.show_toast("TEAM UPGRADE: %s" % player.get_weapon_name(), 2.4)
+	for bot in allies + enemies:
+		if is_instance_valid(bot) and bot.health > 0.0:
+			var next_key := ArsenalRules.weapon_for_score(attack_score if bot.team == 0 else defense_score)
+			if bot.weapon_key != next_key:
+				bot.equip_arsenal_weapon(next_key)
+
+func _end_respawn_match() -> void:
+	if match_over:
+		return
+	match_over = true
+	phase = Phase.ENDED
+	round_end_timer = 3.0
+	player.enabled = false
+	player.invulnerable = true
+	for bot in allies + enemies:
+		if is_instance_valid(bot):
+			bot.set_physics_process(false)
+	var result := "DRAW" if attack_score == defense_score else ("YOUR TEAM WINS" if attack_score > defense_score else "ENEMY TEAM WINS")
+	hud.show_toast("%s  %d : %d" % [result, attack_score, defense_score], 3.0)
 
 func _update_sandbox(delta: float) -> void:
 	phase = Phase.LIVE
@@ -1195,6 +1325,8 @@ func _respawn_player() -> void:
 	player_dead = false
 	var spawn_position := _player_spawn_for_slot(network_spawn_slot)
 	player.reset_for_round(spawn_position)
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		_apply_arsenal_player_loadout()
 	player.enabled = true
 	player.set_view_active(true)
 	spectator_camera.current = false
@@ -1341,6 +1473,9 @@ func _handle_weapon_pickup_or_drop() -> void:
 	_handle_authoritative_weapon_action(player.global_position, player.weapon_key, player.ammo, player.reserve_ammo, 1)
 
 func _handle_authoritative_weapon_action(actor_position: Vector3, weapon_key: String, current_ammo: int, reserve: int, peer_id: int) -> void:
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		hud.show_toast("Arsenal loadouts advance with team eliminations", 1.5)
+		return
 	var nearest: RigidBody3D
 	var nearest_distance := 2.0
 	for candidate in dropped_weapons.values():
@@ -2448,8 +2583,13 @@ func _update_hud() -> void:
 	var site: Dictionary = _current_site()
 	if charge_planted:
 		charge_text = "DEFUSE %.1f" % maxf(0.0, 5.5 - defuse_progress) if defuse_progress > 0.0 else _format_time(bomb_timer)
-	elif not site.is_empty() and player_team == 0:
+	elif game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL and not site.is_empty() and player_team == 0:
 		charge_text = "PLANT %.1f" % maxf(0.0, 3.2 - plant_progress) if plant_progress > 0.0 else "SITE %s" % site.name
+	if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL:
+		phase_text = "ARSENAL / TEAM RACE" if not match_over else "ARSENAL / COMPLETE"
+		charge_text = ArsenalRules.progress_text(attack_score if player_team == 0 else defense_score)
+		if player_dead:
+			charge_text = "RESPAWN IN %.1f" % maxf(0.0, player_respawn_timer)
 	var weapon_spec := WeaponCatalog.get_weapon(player.weapon_key)
 	var ally_positions: Array[Vector3] = []
 	var enemy_positions: Array[Vector3] = []
@@ -2462,14 +2602,14 @@ func _update_hud() -> void:
 		sandbox_browser.set_counts(enemies.size() + allies.size(), sandbox_prop_count, dropped_weapons.size(), sandbox_ragdolls.size())
 	hud.update_state({
 		"map_index": level_index,
-		"map_count": levels.size(),
+		"map_count": levels.size() if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else levels.size() - 1,
 		"map_name": current_level.map_name,
 		"phase": phase_text,
 		"time": "FREE" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else _format_time(bomb_timer if charge_planted else phase_timer),
 		"attack_score": attack_score,
 		"defense_score": defense_score,
 		"money": player.money,
-		"money_text": "SANDBOX" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else "$%d" % player.money,
+		"money_text": "GOAL 24" if game_mode == LocalStrikeMatchConfig.Mode.ARSENAL else ("SANDBOX" if game_mode == LocalStrikeMatchConfig.Mode.SANDBOX else "$%d" % player.money),
 		"health": player.health,
 		"armor": player.armor,
 		"weapon": weapon_spec.display_name,
@@ -2491,7 +2631,7 @@ func _update_hud() -> void:
 		"spectating": player_dead and game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL,
 		"spectator_name": "TEAMMATE",
 		"roster": _scoreboard_roster(),
-		"radar": {"player_position": player.global_position, "player_yaw": player.rotation.y, "allies": ally_positions, "enemies": enemy_positions, "sites": sites}
+		"radar": {"player_position": player.global_position, "player_yaw": player.rotation.y, "allies": ally_positions, "enemies": enemy_positions, "sites": sites if game_mode == LocalStrikeMatchConfig.Mode.DEFUSAL else []}
 	})
 
 func _scoreboard_roster() -> Dictionary:

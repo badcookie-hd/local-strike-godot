@@ -92,8 +92,8 @@ func _run() -> void:
 	open_key.pressed = true
 	game.sandbox_browser._input(open_key)
 	_check(game.sandbox_browser.is_open() and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE, "B opens the browser from the captured FPS view")
-	_check(game.sandbox_browser.get_weapon_card_count() == 22, "spawn browser exposes all 22 equipment items")
-	_check(game.sandbox_browser.get_item_count() == 39, "spawn browser catalog includes bots, equipment, props and world tools")
+	_check(game.sandbox_browser.get_weapon_card_count() == 25, "spawn browser exposes all 25 equipment items")
+	_check(game.sandbox_browser.get_item_count() == 42, "spawn browser catalog includes bots, equipment, props and world tools")
 	_check(game.sandbox_browser._card_buttons.has(&"weapon_fire_axe"), "specific melee card is rendered")
 	await _click_control(game.sandbox_browser._card_buttons[&"weapon_fire_axe"])
 	_check(game.sandbox_browser._selected.id == &"weapon_fire_axe", "clicking a weapon card selects that exact weapon")
@@ -330,7 +330,7 @@ func _select_option_metadata(option: OptionButton, value: String) -> void:
 
 func _test_weapon_data() -> void:
 	var catalog := LocalStrikeWeaponCatalog.all()
-	_check(catalog.size() == 22, "complete 22 item weapon catalog")
+	_check(catalog.size() == 25, "complete 25 item weapon catalog")
 	for key in catalog:
 		var weapon: LocalStrikeWeaponDefinition = catalog[key]
 		_check(not weapon.display_name.is_empty(), "%s has display name" % key)
@@ -358,7 +358,7 @@ func _test_weapon_data() -> void:
 			bot_scene_count += 1
 			_check(FileAccess.file_exists(definition.scene_path), "%s bot preview scene is local" % definition.bot_kind)
 			_check(bool(definition.placement_rules.get("requires_navigation", false)), "%s bot placement requires navigation" % definition.bot_kind)
-	_check(sandbox_weapon_ids.size() == 22, "sandbox catalog contains 22 unique equipment cards")
+	_check(sandbox_weapon_ids.size() == 25, "sandbox catalog contains 25 unique equipment cards")
 	_check(firearm_scene_count == 16, "twelve firearms and four melee items use distinct local CC0 model scenes")
 	_check(bot_scene_count == 3, "three rigged local character variants are available")
 	_check(MaterialLibrary.MATERIALS.size() == 12, "Foundry material library contains twelve PBR sets")

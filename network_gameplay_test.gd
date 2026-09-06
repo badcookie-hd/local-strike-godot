@@ -123,6 +123,9 @@ func _run() -> void:
 	var test_origin: Vector3 = client_game.player.get_aim_origin()
 	var test_direction: Vector3 = client_game.player.get_aim_direction()
 	var test_avatar = host_game.remote_avatars[client_id]
+	_check(test_avatar._weapon.get_meta("weapon_key") == "sentinel", "remote avatar displays the actual synchronized weapon")
+	_check(test_avatar._visual_actor._weapon_attachment.bone_name == "Wrist.R", "remote avatar weapon follows animated hand")
+	_check(test_avatar._visual_actor.collision_layer == 0 and not test_avatar._visual_actor.is_in_group("damageable_actor"), "remote visual does not introduce duplicate damage targets")
 	var view_dot := Vector3(test_direction.x, 0.0, test_direction.z).normalized().dot(-test_avatar.global_transform.basis.z)
 	print("LAN_RELOAD_DIAGNOSTIC weapon=%s client_ammo=%d unlimited=%s sequence=%d origin=%s avatar=%s target=%s origin_distance=%.3f view_dot=%.3f reloading=%s equip_timer=%.3f fire_timer=%.3f avatar_weapon=%s host_state=%s" % [client_game.player.weapon_key, client_game.player.ammo, client_game.player.unlimited_ammo, client_game.player._shot_sequence, test_origin, test_avatar.global_position, test_avatar.target_position, test_avatar.global_position.distance_to(test_origin), view_dot, client_game.player.is_reloading(), client_game.player._equip_timer, client_game.player._fire_cooldown, test_avatar.weapon_name, host_game.peer_shot_state.get(client_id, {})])
 	_check(int(host_game.peer_shot_state.get(client_id, {}).get("ammo", -1)) == LocalStrikeWeaponCatalog.get_weapon("sentinel").magazine - 1, "host accepts the first shot after a validated partial reload")
